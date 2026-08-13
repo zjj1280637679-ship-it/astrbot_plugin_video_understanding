@@ -17,19 +17,35 @@ class BoundVideo:
 
 
 def _display_name(video: Video, fallback: str) -> str:
-    ref = str(video.path or video.url or video.file or "").strip()
+    ref = ""
+    for attr in ("path", "url", "file"):
+        value = getattr(video, attr, None)
+        if value:
+            ref = str(value).strip()
+            if ref:
+                break
     if not ref:
         return fallback
     name = os.path.basename(ref.split("?", 1)[0].rstrip("/"))
     return name or fallback
 
 
+def _message_components(event: AstrMessageEvent) -> list:
+    message_obj = getattr(event, "message_obj", None)
+    message = getattr(message_obj, "message", None)
+    if not isinstance(message, (list, tuple)):
+        return []
+    return list(message)
+
+
 def bind_videos_from_event(event: AstrMessageEvent) -> list[BoundVideo]:
-    """Bind current videos first, then videos embedded in replies."""
+    components = _message_components(event)
+    if not components:
+        return []
 
     bound: list[BoundVideo] = []
 
-    for component in event.message_obj.message:
+    for component in components:
         if isinstance(component, Video):
             index = len(bound)
             bound.append(
@@ -41,10 +57,13 @@ def bind_videos_from_event(event: AstrMessageEvent) -> list[BoundVideo]:
                 )
             )
 
-    for component in event.message_obj.message:
-        if not isinstance(component, Reply) or not component.chain:
+    for component in components:
+        if not isinstance(component, Reply):
             continue
-        for reply_component in component.chain:
+        chain = getattr(component, "chain", None)
+        if not isinstance(chain, (list, tuple)):
+            continue
+        for reply_component in chain:
             if isinstance(reply_component, Video):
                 index = len(bound)
                 bound.append(
