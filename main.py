@@ -63,7 +63,9 @@ class VideoSemanticSearchPlugin(Star):
         tool = self.query_video_tool
         if tool is None or req.func_tool is None:
             return
-        if req.func_tool.get_tool(tool.name) is None:
+
+        request_tool = req.func_tool.get_tool(tool.name)
+        if request_tool is None or not _belongs_to_this_plugin(request_tool):
             return
         if bind_videos_from_event(event):
             return
