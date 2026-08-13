@@ -1,22 +1,23 @@
 from __future__ import annotations
 
-from dataclasses import fields as dataclass_fields
+import inspect
 
 from astrbot.core.agent.message import TextPart
-from astrbot.core.provider.entities import ProviderRequest
 
 from .video_binding import BoundVideo
 
 
-def provider_request_has_native_video_urls() -> bool:
-    """Return whether the running AstrBot host exposes native video_urls."""
-
+def provider_accepts_native_video_urls(provider: object | None) -> bool:
+    """Check the selected Provider transport contract, not model capability."""
+    if provider is None:
+        return False
+    text_chat = getattr(provider, "text_chat", None)
+    if not callable(text_chat):
+        return False
     try:
-        return any(
-            field.name == "video_urls" for field in dataclass_fields(ProviderRequest)
-        )
-    except TypeError:
-        return "video_urls" in getattr(ProviderRequest, "__annotations__", {})
+        return "video_urls" in inspect.signature(text_chat).parameters
+    except (TypeError, ValueError):
+        return False
 
 
 def _safe_marker_name(bound: BoundVideo) -> str:
@@ -28,8 +29,6 @@ def _safe_marker_name(bound: BoundVideo) -> str:
 
 
 def build_video_attachment_marker(bound: BoundVideo, video_path: str) -> str:
-    """Mirror AstrBot's current trusted video attachment envelope."""
-
     path = str(video_path or "")
     if not path:
         raise ValueError("video path is empty")
@@ -43,10 +42,14 @@ def build_video_attachment_marker(bound: BoundVideo, video_path: str) -> str:
     )
 
 
-def build_video_transport_kwargs(bound: BoundVideo, video_path: str) -> dict:
-    """Build the thinnest video input accepted by the running AstrBot host."""
-
-    if provider_request_has_native_video_urls():
+def build_video_transport_kwargs(
+    bound: BoundVideo,
+    video_path: str,
+    *,
+    provider: object | None = None,
+) -> dict:
+    """Use native video only when the selected Provider explicitly exposes it."""
+    if provider_accepts_native_video_urls(provider):
         return {"video_urls": [video_path]}
 
     return {
