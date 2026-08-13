@@ -1,143 +1,85 @@
 # astrbot_plugin_video_understanding
 
-AstrBot 视频语义搜索插件。
+AstrBot 对话式视频搜索插件。
 
-它不是“收到视频就先生成一份摘要”的转述器，而是把当前或引用消息中的视频作为一个**可反复查询的有界信息空间**交给主模型：主模型在 AstrBot 原有 Tool Loop 中调用 `query_video`，读取局部视频证据，再决定是否继续提出新的、更具体的问题。
-
-## 工作方式
+`query_video` 不是自动视频摘要器，也不增强视频模型的智能。它只把当前/引用视频与主模型整理出的自然语言问题交给管理员选择的已有视频能力模型卡，再把答案返回主模型。
 
 ```text
 用户问题 + 视频
-      ↓
-AstrBot 主模型
-      ↓
-query_video("当前需要确认的一个视频子问题")
-      ↓
-管理员选择的视频能力模型卡
-      ↓
-返回局部视频证据
-      ↓
-主模型读取证据
-      ├─ 信息不足 → 再次 query_video(新的子问题)
-      └─ 证据充分 → 主模型最终回答
+→ 主模型整理查询
+→ query_video
+→ 视频模型回答
+→ 主模型判断是否还要问
+→ 必要时继续 query_video
+→ 视频模型保留此前同视频 Q/A
+→ 主模型最终回答
 ```
 
-视频是被搜索的信息空间；视频能力模型卡是语义搜索引擎；主模型负责查询规划、证据综合和最终回答。
+视频理解深度由“用户问题所需深度 × 视频模型自身能力”决定。插件不规定只能直接观察、不能做因果分析、必须窄查询或固定分析步骤。
 
-## 已验证闭环
+## 连续查询
 
-2026-08-13 已完成真实运行验证：
+同一次 AstrBot event / Agent run 中，同一 `provider_id + video_index` 的成功 Q/A 会原样作为后续视频模型调用的 `contexts`：
 
-- AstrBot `v4.27.3`：安装、pytest、启动和插件加载通过；
-- 当日 AstrBot `master`：安装、pytest、启动和插件加载通过；
-- 真实火山方舟视频模型 `doubao-seed-2-1-pro-260628`：同一测试视频连续查询成功；
-- AstrBot `ToolLoopAgentRunner`：主模型真实产生两次不同的 `query_video` 调用，第一次取得 `ALPHA`，第二次取得 `BETA`，最终回答 `FIRST=ALPHA; SECOND=BETA`。
+```text
+Q1 → A1
+Q2 + Q1/A1 → A2
+Q3 + Q1/A1/Q2/A2 → A3
+```
 
-详细运行证据见 `docs/RUNTIME_PROOF.md` 和 `docs/EVIDENCE_CURATED.md`。
+历史不摘要、不改写；不同视频/Provider 隔离；event 结束自然失效；失败调用不进入历史。插件不建立永久视频数据库。
+
+因此可以自然追问：
+
+```text
+Q1: 哪个大字包含字母 M？
+A1: GAMMA
+Q2: 它之前是什么？
+A2: BETA
+```
+
+第二问不需要重新把 `GAMMA` 写进 prompt。
+
+## 工具参数
+
+```text
+query       必填：交给视频模型的问题或提示词
+video_index 可选：视频编号，默认 0
+time_range  可选：时间范围注意力提示
+```
+
+`time_range` 不会裁剪视频，也不保证降低 Provider 成本。
+
+当前消息视频先编号，然后加入 `Reply.chain` 中的引用视频。无视频、索引越界、视频解析失败或 Provider 调用失败都会明确失败。
+
+## 职责边界
+
+`query_video` 服从 AstrBot Tool Manager、工具启停和人格白名单。插件只消费 AstrBot / Provider 已有的视频传输能力，不增加：
+
+- 供应商专属 SDK 或品牌路由；
+- 视频能力重复探测；
+- 自建上传器；
+- OCR / STT / 抽帧 / FFmpeg 业务降级；
+- 自动摘要或自动问题分解；
+- 独立 Agent Loop；
+- 永久视频资产库。
+
+## 当前验证
+
+当前业务 runtime：
+
+```text
+d5f4742e114771669a7e969a8eb6e62d3bffa883
+```
+
+真实火山方舟 + AstrBot ToolLoop 验证已经证明：视频模型第一次回答 `GAMMA` 后，主模型第二次只用“that word / 它”进行追问；第二次视频模型调用实际收到此前 `user + assistant(GAMMA)` contexts，返回 `BETA`，最终主模型回答：
+
+```text
+REFERENT=GAMMA; BEFORE=BETA
+```
+
+当前权威验证基线：`docs/FINAL_VALIDATION_BASELINE_2026-08-14.md`。
 
 ## 配置
 
-插件只需要选择 AstrBot 中**已经配置好的视频能力模型卡**：
-
-```text
-启用视频语义搜索工具：开启
-视频搜索模型：选择已有模型卡
-```
-
-配置项通过 AstrBot `_special: select_provider` 选择现有模型卡。本插件不保存 API Key、Base URL，也不建立自己的 Provider 数据库。
-
-`query_video` 仍服从 AstrBot 自己的工具策略：
-
-- 在 AstrBot 工具管理中禁用它后，插件不会在请求阶段偷偷加回来；
-- 人格使用明确的工具白名单时，需要由管理员允许 `query_video`；
-- 当前/引用消息没有视频时，本轮请求会隐藏 `query_video`，避免无意义地占用工具 schema；
-- 如果已经存在其他插件注册的同名 `query_video`，本插件失败封闭，不覆盖第三方工具。
-
-## query_video
-
-核心工具参数：
-
-```text
-query       必填：这一次需要从视频中确认的一个明确问题
-video_index 可选：本轮视频编号，默认 0
-time_range  可选：例如 00:12-00:25
-```
-
-一次调用只负责回答当前查询。主模型可以根据工具结果再次调用，而不是要求视频模型一次完成整个用户任务。
-
-`time_range` 是给视频模型的注意力提示，不代表插件自行裁剪视频；实际视频传输、压缩或文件复用仍属于 AstrBot / Provider 的职责。
-
-示例：
-
-```text
-query_video("用户什么时候点击保存，点击后界面发生了什么？")
-→ 返回时间与界面变化证据
-
-query_video("刚才出现的失败提示具体写了什么？")
-→ 返回更窄的文字证据
-
-主模型结合两次结果与其他上下文给出最终判断
-```
-
-## 视频绑定
-
-第一版规则：
-
-1. 当前消息中的视频优先；
-2. 多个当前视频按出现顺序编号；
-3. 然后加入 `Reply.chain` 中的引用视频；
-4. `video_index` 从 `0` 开始；
-5. 无视频或索引越界时失败封闭，不猜测目标。
-
-第一版不建立跨后续消息的永久视频资产库。
-
-## 数据发送与隐私
-
-插件**不会因为收到视频就自动调用第二个模型**。只有主模型实际调用 `query_video` 时，本次选中的视频引用和该次自然语言子查询才会通过 AstrBot 现有 Provider 链路发送给管理员配置的“视频搜索模型”所属 Provider。
-
-因此：
-
-- 没有发生 `query_video` 调用，就没有由本插件触发的视频模型请求；
-- 选择远程 Provider 时，视频内容会按该 Provider 的实现与数据政策发送到对应服务；
-- 插件不建立长期视频副本、独立上传仓库或第二套聊天历史；
-- 插件日志不应记录视频 Base64、完整临时 URL、API Key 或完整视频转录。
-
-管理员应只选择自己认可其数据处理方式的视频模型卡。
-
-## AstrBot / Provider 职责边界
-
-插件只消费 AstrBot 和所选 Provider 已经提供的视频传输能力。
-
-当前 AstrBot v4.27.3 尚没有统一的 `ProviderRequest.video_urls` 字段，因此插件会复用 AstrBot 当前请求已经使用的可信 `Video Attachment` 内容形态；未来宿主出现原生 `video_urls` 后，传输层可直接切换到宿主统一字段。
-
-具体 Provider 如何把 AstrBot 视频输入转换成供应商请求体，属于该 Provider 的职责。本插件不会增加：
-
-- Google / Gemini SDK；
-- 火山方舟 SDK；
-- MiniMax 专用分支；
-- 自建视频上传器；
-- FFmpeg / OCR / STT 降级流水线；
-- 独立 Agent Loop；
-- 独立视频数据库。
-
-目前真实端到端验证覆盖了火山方舟 Provider；这不能外推为所有 Provider 已经完成同样验证。
-
-## 安全边界
-
-视频模型的输出被序列化为一个低信任 JSON 证据对象，而不是高优先级指令。视频里的字幕、对白、代码或“忽略之前规则”等内容仍然只是被搜索的视频内容，不能通过伪造 XML/标签边界改变工具结果结构。
-
-传输探针使用每次查询独立的随机哨兵，因此视频画面真实出现普通字符串 `VIDEO_INPUT_UNAVAILABLE` 时不会被误判为传输失败。
-
-传输失败、模型没有真正收到视频、无视频或索引错误都会返回明确失败状态，主模型不得把失败解释为“视频中不存在该内容”。
-
-## 设计与证据文档
-
-- `docs/ADR-001-video-as-search-space.md`：核心架构决策
-- `docs/NEXT_STAGE_PLAN.md`：阶段闸门与验收目标
-- `docs/EVIDENCE_CURATED.md`：证据等级与可支持结论
-- `docs/RUNTIME_PROOF.md`：真实 AstrBot / Provider / Tool Loop 运行证据
-- `docs/TOOL_CONTRACT.md`：`query_video` 工具契约
-- `docs/UPSTREAM_COMPATIBILITY.md`：AstrBot 上游视频接口状态
-- `docs/SECURITY_BOUNDARY.md`：安全与职责边界
-- `docs/SIDE_EFFECT_AUDIT.md`：副作用与漏洞排查记录
-- `docs/TEST_PLAN.md`：测试与发布验收
+只需在 AstrBot 中选择已经配置好的视频能力模型卡。插件不保存 API Key、Base URL，也不维护自己的 Provider 数据库。
