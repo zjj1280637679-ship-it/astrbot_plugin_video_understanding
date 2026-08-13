@@ -59,8 +59,10 @@ async def test_same_tool_object_keeps_concurrent_video_queries_isolated(monkeypa
     second_system = seen["second"]["system_prompt"]
     assert "FIRST_QUERY" not in first_system
     assert "SECOND_QUERY" not in second_system
-    assert "read-only semantic search engine" in first_system
-    assert "read-only semantic search engine" in second_system
+    assert "your own video-understanding capability" in first_system
+    assert "your own video-understanding capability" in second_system
+    assert "read-only semantic search engine" not in first_system
+    assert "read-only semantic search engine" not in second_system
 
     token_pattern = r"VIDEO_INPUT_UNAVAILABLE_[0-9a-f]{32}"
     first_token = re.search(token_pattern, first_system)
