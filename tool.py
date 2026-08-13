@@ -8,7 +8,7 @@ from astrbot.core.agent.run_context import ContextWrapper
 from astrbot.core.agent.tool import FunctionTool, ToolExecResult
 from astrbot.core.astr_agent_context import AstrAgentContext
 
-from .video_binding import BoundVideo, VIDEO_BINDINGS_EXTRA_KEY
+from .video_binding import BoundVideo, bind_videos_from_event
 
 VIDEO_INPUT_UNAVAILABLE = "VIDEO_INPUT_UNAVAILABLE"
 
@@ -33,9 +33,10 @@ def build_video_query_prompt(query: str, time_range: str = "") -> str:
 class QueryVideoTool(FunctionTool[AstrAgentContext]):
     name: str = "query_video"
     description: str = (
-        "Search one video attached to the current or quoted message by asking a video-capable model a focused natural-language question. "
-        "The tool may be called repeatedly: use each result to decide whether another narrower video query is needed. "
-        "Results are evidence for the main model, not the final user-facing answer."
+        "Search a video attached to the current or quoted message by asking the configured video-capable model one focused question. "
+        "Call this before claiming facts from a video you cannot inspect directly. "
+        "The tool can be called repeatedly; use each result to decide whether a narrower follow-up query is needed. "
+        "Results are evidence for the main model, not the final answer."
     )
     parameters: dict = Field(
         default_factory=lambda: {
@@ -47,7 +48,7 @@ class QueryVideoTool(FunctionTool[AstrAgentContext]):
                 },
                 "video_index": {
                     "type": "integer",
-                    "description": "Request-local video index. Defaults to 0.",
+                    "description": "Video index in the current request. Defaults to 0.",
                     "default": 0,
                     "minimum": 0,
                 },
@@ -74,7 +75,6 @@ class QueryVideoTool(FunctionTool[AstrAgentContext]):
             index = int(kwargs.get("video_index", 0))
         except (TypeError, ValueError):
             return "VIDEO_QUERY_ERROR: video_index must be an integer"
-
         if index < 0:
             return "VIDEO_QUERY_ERROR: video_index must be non-negative"
 
@@ -82,9 +82,9 @@ class QueryVideoTool(FunctionTool[AstrAgentContext]):
         event = agent_context.event
         astrbot_context = agent_context.context
 
-        bindings = event.get_extra(VIDEO_BINDINGS_EXTRA_KEY) or []
-        if not isinstance(bindings, list) or not bindings:
-            return "VIDEO_QUERY_ERROR: no video is bound to this request"
+        bindings = bind_videos_from_event(event)
+        if not bindings:
+            return "VIDEO_QUERY_ERROR: no video exists in the current or quoted message"
         if index >= len(bindings):
             return (
                 f"VIDEO_QUERY_ERROR: video_index {index} is out of range; "
@@ -93,7 +93,7 @@ class QueryVideoTool(FunctionTool[AstrAgentContext]):
 
         bound = bindings[index]
         if not isinstance(bound, BoundVideo):
-            return "VIDEO_QUERY_ERROR: invalid request-local video binding"
+            return "VIDEO_QUERY_ERROR: invalid video binding"
 
         provider_id = str(self.provider_id or "").strip()
         if not provider_id:
@@ -103,7 +103,7 @@ class QueryVideoTool(FunctionTool[AstrAgentContext]):
             video_path = await bound.component.convert_to_file_path()
         except Exception:
             logger.warning(
-                "[video-semantic-search] failed to resolve bound video index=%s",
+                "[video-semantic-search] failed to resolve video index=%s",
                 index,
                 exc_info=True,
             )
