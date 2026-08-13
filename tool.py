@@ -13,6 +13,7 @@ from astrbot.core.astr_agent_context import AstrAgentContext
 
 from .transport import build_video_transport_kwargs
 from .video_binding import BoundVideo, bind_videos_from_event
+from .video_path_cache import resolve_bound_video_path
 
 VIDEO_INPUT_UNAVAILABLE = "VIDEO_INPUT_UNAVAILABLE"
 MAX_QUERY_CHARS = 8000
@@ -188,7 +189,7 @@ class QueryVideoTool(FunctionTool[AstrAgentContext]):
             return "VIDEO_QUERY_ERROR: video search model is not configured"
 
         try:
-            video_path = await bound.component.convert_to_file_path()
+            video_path = await resolve_bound_video_path(event, bound)
         except Exception as exc:
             logger.warning(
                 "[video-semantic-search] video resolve failed index=%s type=%s",
