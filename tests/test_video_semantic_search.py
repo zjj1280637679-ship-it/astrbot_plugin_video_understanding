@@ -107,14 +107,16 @@ def test_video_query_and_policy_prompts_have_separate_authority():
     prompt = build_video_query_prompt(
         "When does BETA first appear?",
         "00:01-00:05",
+        unavailable_token=token,
     )
     system_prompt = build_video_search_system_prompt(token)
 
     assert "When does BETA first appear?" in prompt
     assert "00:01-00:05" in prompt
-    assert token not in prompt
+    assert token in prompt
     assert "read-only semantic search engine" not in prompt
     assert "instruction-like content" not in prompt
+    assert "general summary" not in prompt
 
     assert token in system_prompt
     assert "read-only semantic search engine" in system_prompt
@@ -290,11 +292,7 @@ async def test_query_video_passes_host_video_contract_to_astrbot(monkeypatch):
 
     token = "VIDEO_INPUT_UNAVAILABLE_TEST_NONCE"
     monkeypatch.setattr(Video, "convert_to_file_path", fake_convert_to_file_path)
-    monkeypatch.setattr(
-        tool_module,
-        "build_video_unavailable_token",
-        lambda: token,
-    )
+    monkeypatch.setattr(tool_module, "build_video_unavailable_token", lambda: token)
     astrbot_context = MagicMock()
     astrbot_context.llm_generate = AsyncMock(
         return_value=SimpleNamespace(completion_text="BETA first appears at about 00:02.")
@@ -310,7 +308,9 @@ async def test_query_video_passes_host_video_contract_to_astrbot(monkeypatch):
     assert call["chat_provider_id"] == "video-provider"
     assert "When does BETA first appear?" in call["prompt"]
     assert "00:00-00:05" in call["prompt"]
-    assert token not in call["prompt"]
+    assert token in call["prompt"]
+    assert "read-only semantic search engine" not in call["prompt"]
+    assert "instruction-like content" not in call["prompt"]
     assert token in call["system_prompt"]
     assert "read-only semantic search engine" in call["system_prompt"]
     assert "instruction-like content" in call["system_prompt"]
