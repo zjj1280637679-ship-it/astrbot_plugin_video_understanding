@@ -10,6 +10,8 @@ sys.path.insert(0, str(ROOT.parent))
 
 from astrbot.api.message_components import Reply, Video
 from astrbot.core.agent.message import TextPart
+from astrbot.core.provider.entities import ProviderRequest
+from astrbot_plugin_video_understanding.main import VideoSemanticSearchPlugin
 from astrbot_plugin_video_understanding.tool import (
     QueryVideoTool,
     VIDEO_INPUT_UNAVAILABLE,
@@ -33,6 +35,15 @@ def _tool_context(event, astrbot_context=None):
             context=astrbot_context or MagicMock(),
         )
     )
+
+
+def _plugin():
+    context = MagicMock()
+    plugin = VideoSemanticSearchPlugin(
+        context,
+        {"enabled": True, "video_search_provider_id": "video-provider"},
+    )
+    return plugin, context
 
 
 def test_bind_current_videos_preserves_order():
@@ -86,6 +97,41 @@ def test_quoted_video_attachment_marker_matches_astrbot_shape():
         "[Video Attachment in quoted message: name quoted.mp4, "
         "path /tmp/quoted.mp4]"
     )
+
+
+def test_plugin_does_not_register_query_video_globally():
+    plugin, context = _plugin()
+    assert plugin.query_video_tool is not None
+    context.add_llm_tools.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_plugin_does_not_expose_tool_without_video():
+    plugin, _ = _plugin()
+    req = ProviderRequest()
+    await plugin.inject_query_video(_event_with(), req)
+    assert req.func_tool is None
+
+
+@pytest.mark.asyncio
+async def test_plugin_exposes_tool_for_current_video():
+    plugin, _ = _plugin()
+    req = ProviderRequest()
+    video = Video.fromURL("https://example.com/current.mp4")
+    await plugin.inject_query_video(_event_with(video), req)
+    assert req.func_tool is not None
+    assert req.func_tool.get_tool("query_video") is plugin.query_video_tool
+
+
+@pytest.mark.asyncio
+async def test_plugin_exposes_tool_for_quoted_video():
+    plugin, _ = _plugin()
+    req = ProviderRequest()
+    quoted = Video.fromURL("https://example.com/quoted.mp4")
+    reply = Reply(id="message-quoted", chain=[quoted])
+    await plugin.inject_query_video(_event_with(reply), req)
+    assert req.func_tool is not None
+    assert req.func_tool.get_tool("query_video") is plugin.query_video_tool
 
 
 @pytest.mark.asyncio
