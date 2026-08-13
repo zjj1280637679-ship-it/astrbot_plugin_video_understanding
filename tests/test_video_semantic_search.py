@@ -8,14 +8,14 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT.parent))
 
-from astrbot.api.message_components import Video
+from astrbot.api.message_components import Reply, Video
 from astrbot.core.agent.message import TextPart
 from astrbot_plugin_video_understanding.tool import (
     QueryVideoTool,
     VIDEO_INPUT_UNAVAILABLE,
-    build_video_attachment_marker,
     build_video_query_prompt,
 )
+from astrbot_plugin_video_understanding.transport import build_video_attachment_marker
 from astrbot_plugin_video_understanding.video_binding import bind_videos_from_event
 
 
@@ -45,6 +45,23 @@ def test_bind_current_videos_preserves_order():
     assert [item.component for item in bound] == [first, second]
 
 
+def test_current_videos_precede_quoted_videos():
+    current_a = Video.fromURL("https://example.com/current-a.mp4")
+    current_b = Video.fromURL("https://example.com/current-b.mp4")
+    quoted = Video.fromURL("https://example.com/quoted.mp4")
+    reply = Reply(id="message-1", chain=[quoted])
+
+    bound = bind_videos_from_event(_event_with(reply, current_a, current_b))
+
+    assert [item.index for item in bound] == [0, 1, 2]
+    assert [item.source for item in bound] == ["current", "current", "quoted"]
+    assert [item.display_name for item in bound] == [
+        "current-a.mp4",
+        "current-b.mp4",
+        "quoted.mp4",
+    ]
+
+
 def test_video_query_prompt_is_query_scoped():
     prompt = build_video_query_prompt("When does BETA first appear?", "00:01-00:05")
     assert "When does BETA first appear?" in prompt
@@ -60,11 +77,36 @@ def test_current_video_attachment_marker_matches_astrbot_shape():
     assert marker == "[Video Attachment: name alpha.mp4, path /tmp/alpha.mp4]"
 
 
+def test_quoted_video_attachment_marker_matches_astrbot_shape():
+    video = Video.fromURL("https://example.com/quoted.mp4")
+    reply = Reply(id="message-2", chain=[video])
+    bound = bind_videos_from_event(_event_with(reply))[0]
+    marker = build_video_attachment_marker(bound, "/tmp/quoted.mp4")
+    assert marker == (
+        "[Video Attachment in quoted message: name quoted.mp4, "
+        "path /tmp/quoted.mp4]"
+    )
+
+
 @pytest.mark.asyncio
 async def test_query_video_fails_closed_without_video():
     tool = QueryVideoTool(provider_id="video-provider")
     result = await tool.call(_tool_context(_event_with()), query="What happens?")
     assert result == "VIDEO_QUERY_ERROR: no video exists in the current or quoted message"
+
+
+@pytest.mark.asyncio
+async def test_query_video_rejects_out_of_range_index():
+    video = Video.fromURL("https://example.com/alpha.mp4")
+    tool = QueryVideoTool(provider_id="video-provider")
+    result = await tool.call(
+        _tool_context(_event_with(video)),
+        query="What happens?",
+        video_index=2,
+    )
+    assert result == (
+        "VIDEO_QUERY_ERROR: video_index 2 is out of range; available indexes are 0..0"
+    )
 
 
 @pytest.mark.asyncio
@@ -96,7 +138,9 @@ async def test_query_video_passes_host_video_contract_to_astrbot(monkeypatch):
         parts = call["extra_user_content_parts"]
         assert len(parts) == 1
         assert isinstance(parts[0], TextPart)
-        assert parts[0].text == "[Video Attachment: name alpha.mp4, path /tmp/alpha.mp4]"
+        assert parts[0].text == (
+            "[Video Attachment: name alpha.mp4, path /tmp/alpha.mp4]"
+        )
     assert "BETA first appears" in result
 
 
