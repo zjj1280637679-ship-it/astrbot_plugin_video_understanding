@@ -48,6 +48,13 @@ def _plugin():
     return plugin, context
 
 
+def test_bind_synthetic_event_without_message_chain_is_empty():
+    assert bind_videos_from_event(SimpleNamespace(message_obj=None)) == []
+    assert bind_videos_from_event(
+        SimpleNamespace(message_obj=SimpleNamespace(message=None))
+    ) == []
+
+
 def test_bind_current_videos_preserves_order():
     first = Video.fromURL("https://example.com/alpha.mp4")
     second = Video.fromURL("https://example.com/beta.mp4")
@@ -124,6 +131,14 @@ async def test_plugin_does_not_expose_tool_without_video():
     plugin, _ = _plugin()
     req = ProviderRequest()
     await plugin.inject_query_video(_event_with(), req)
+    assert req.func_tool is None
+
+
+@pytest.mark.asyncio
+async def test_plugin_ignores_synthetic_event_without_message_chain():
+    plugin, _ = _plugin()
+    req = ProviderRequest()
+    await plugin.inject_query_video(SimpleNamespace(message_obj=None), req)
     assert req.func_tool is None
 
 
