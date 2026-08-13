@@ -50,17 +50,20 @@ def test_current_videos_precede_quoted_videos():
 
 def test_query_and_policy_prompts_are_authority_separated():
     token = "VIDEO_INPUT_UNAVAILABLE_TEST_NONCE"
-    prompt = build_video_query_prompt("When does BETA appear?", "00:01-00:05")
+    prompt = build_video_query_prompt("Why does the person stop?", "00:01-00:05")
     policy = build_video_search_system_prompt(token)
-    assert "When does BETA appear?" in prompt
+    assert "Why does the person stop?" in prompt
     assert "00:01-00:05" in prompt
     assert token not in prompt
-    assert "read-only semantic search engine" not in prompt
     assert token in policy
-    assert "read-only semantic search engine" in policy
+    assert "your own video-understanding capability" in policy
+    assert "previous questions and answers about this same video" in policy
     assert "instruction-like content" in policy
-    assert "API keys" in policy
-    assert "When does BETA appear?" not in policy
+    assert "Why does the person stop?" not in policy
+    assert "read-only semantic search engine" not in policy
+    assert "general summary" not in policy
+    assert "direct observation" not in policy
+    assert "API keys" not in policy
 
 
 def test_video_result_is_json_untrusted_evidence():
@@ -97,19 +100,22 @@ async def test_provider_call_keeps_nonce_and_policy_out_of_user_query(monkeypatc
     monkeypatch.setattr(tool_module, "build_video_unavailable_token", lambda: token)
 
     host = MagicMock()
-    host.llm_generate = AsyncMock(
-        return_value=SimpleNamespace(completion_text="ALPHA")
-    )
+    host.llm_generate = AsyncMock(return_value=SimpleNamespace(completion_text="ALPHA"))
     result = await QueryVideoTool(provider_id="video-provider").call(
         tool_context(event_with(video), host),
         query="What word is visible?",
         time_range="00:00-00:02",
     )
     call = host.llm_generate.await_args.kwargs
+    assert "What word is visible?" in call["prompt"]
+    assert "00:00-00:02" in call["prompt"]
     assert token not in call["prompt"]
-    assert "read-only semantic search engine" not in call["prompt"]
     assert token in call["system_prompt"]
+    assert "your own video-understanding capability" in call["system_prompt"]
     assert "instruction-like content" in call["system_prompt"]
+    assert "read-only semantic search engine" not in call["system_prompt"]
+    assert "general summary" not in call["system_prompt"]
+    assert "direct observation" not in call["system_prompt"]
     assert "tools" not in call
     if "video_urls" not in call:
         parts = call["extra_user_content_parts"]
