@@ -1,7 +1,11 @@
 from astrbot.api import logger
+from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.provider import ProviderRequest
 from astrbot.api.star import Context, Star
+from astrbot.core.agent.tool import ToolSet
 
 from .tool import QueryVideoTool
+from .video_binding import bind_videos_from_event
 
 VERSION = "0.1.0"
 
@@ -20,15 +24,28 @@ class VideoSemanticSearchPlugin(Star):
                 provider_id=self.video_search_provider_id,
                 handler_module_path=__name__,
             )
-            self.context.add_llm_tools(self.query_video_tool)
             logger.info(
-                "[video-semantic-search] query_video registered version=%s",
+                "[video-semantic-search] query_video prepared version=%s; injected only for requests containing video",
                 VERSION,
             )
         else:
             self.query_video_tool = None
             logger.info(
-                "[video-semantic-search] tool not registered; enabled=%s provider_configured=%s",
+                "[video-semantic-search] tool unavailable; enabled=%s provider_configured=%s",
                 self.enabled,
                 bool(self.video_search_provider_id),
             )
+
+    @filter.on_llm_request()
+    async def inject_query_video(
+        self,
+        event: AstrMessageEvent,
+        req: ProviderRequest,
+    ) -> None:
+        if self.query_video_tool is None:
+            return
+        if not bind_videos_from_event(event):
+            return
+        if req.func_tool is None:
+            req.func_tool = ToolSet()
+        req.func_tool.add_tool(self.query_video_tool)
