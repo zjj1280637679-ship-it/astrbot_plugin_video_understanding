@@ -9,9 +9,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT.parent))
 
 from astrbot.api.message_components import Video
+from astrbot.core.agent.message import TextPart
 from astrbot_plugin_video_understanding.tool import (
     QueryVideoTool,
     VIDEO_INPUT_UNAVAILABLE,
+    build_video_attachment_marker,
     build_video_query_prompt,
 )
 from astrbot_plugin_video_understanding.video_binding import bind_videos_from_event
@@ -36,9 +38,7 @@ def _tool_context(event, astrbot_context=None):
 def test_bind_current_videos_preserves_order():
     first = Video.fromURL("https://example.com/alpha.mp4")
     second = Video.fromURL("https://example.com/beta.mp4")
-
     bound = bind_videos_from_event(_event_with(first, second))
-
     assert [item.index for item in bound] == [0, 1]
     assert [item.source for item in bound] == ["current", "current"]
     assert [item.display_name for item in bound] == ["alpha.mp4", "beta.mp4"]
@@ -46,59 +46,57 @@ def test_bind_current_videos_preserves_order():
 
 
 def test_video_query_prompt_is_query_scoped():
-    prompt = build_video_query_prompt(
-        "When does BETA first appear?", "00:01-00:05"
-    )
-
+    prompt = build_video_query_prompt("When does BETA first appear?", "00:01-00:05")
     assert "When does BETA first appear?" in prompt
     assert "00:01-00:05" in prompt
     assert VIDEO_INPUT_UNAVAILABLE in prompt
     assert "general summary" in prompt
 
 
+def test_current_video_attachment_marker_matches_astrbot_shape():
+    video = Video.fromURL("https://example.com/alpha.mp4")
+    bound = bind_videos_from_event(_event_with(video))[0]
+    marker = build_video_attachment_marker(bound, "/tmp/alpha.mp4")
+    assert marker == "[Video Attachment: name alpha.mp4, path /tmp/alpha.mp4]"
+
+
 @pytest.mark.asyncio
 async def test_query_video_fails_closed_without_video():
     tool = QueryVideoTool(provider_id="video-provider")
-
-    result = await tool.call(
-        _tool_context(_event_with()),
-        query="What happens?",
-    )
-
-    assert result == (
-        "VIDEO_QUERY_ERROR: no video exists in the current or quoted message"
-    )
+    result = await tool.call(_tool_context(_event_with()), query="What happens?")
+    assert result == "VIDEO_QUERY_ERROR: no video exists in the current or quoted message"
 
 
 @pytest.mark.asyncio
-async def test_query_video_passes_video_urls_to_astrbot(monkeypatch):
+async def test_query_video_passes_host_video_contract_to_astrbot(monkeypatch):
     video = Video.fromURL("https://example.com/alpha.mp4")
 
     async def fake_convert_to_file_path(self):
         return "/tmp/alpha.mp4"
 
     monkeypatch.setattr(Video, "convert_to_file_path", fake_convert_to_file_path)
-
     astrbot_context = MagicMock()
     astrbot_context.llm_generate = AsyncMock(
-        return_value=SimpleNamespace(
-            completion_text="BETA first appears at about 00:02."
-        )
+        return_value=SimpleNamespace(completion_text="BETA first appears at about 00:02.")
     )
     tool = QueryVideoTool(provider_id="video-provider")
-
     result = await tool.call(
         _tool_context(_event_with(video), astrbot_context),
         query="When does BETA first appear?",
         video_index=0,
         time_range="00:00-00:05",
     )
-
     call = astrbot_context.llm_generate.await_args.kwargs
     assert call["chat_provider_id"] == "video-provider"
-    assert call["video_urls"] == ["/tmp/alpha.mp4"]
     assert "When does BETA first appear?" in call["prompt"]
     assert "00:00-00:05" in call["prompt"]
+    if "video_urls" in call:
+        assert call["video_urls"] == ["/tmp/alpha.mp4"]
+    else:
+        parts = call["extra_user_content_parts"]
+        assert len(parts) == 1
+        assert isinstance(parts[0], TextPart)
+        assert parts[0].text == "[Video Attachment: name alpha.mp4, path /tmp/alpha.mp4]"
     assert "BETA first appears" in result
 
 
@@ -110,17 +108,14 @@ async def test_query_video_rejects_transport_sentinel(monkeypatch):
         return "/tmp/alpha.mp4"
 
     monkeypatch.setattr(Video, "convert_to_file_path", fake_convert_to_file_path)
-
     astrbot_context = MagicMock()
     astrbot_context.llm_generate = AsyncMock(
         return_value=SimpleNamespace(completion_text=VIDEO_INPUT_UNAVAILABLE)
     )
     tool = QueryVideoTool(provider_id="video-provider")
-
     result = await tool.call(
         _tool_context(_event_with(video), astrbot_context),
         query="What is on screen?",
     )
-
     assert result.startswith("VIDEO_QUERY_ERROR:")
     assert "did not receive a usable video" in result
