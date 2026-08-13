@@ -57,19 +57,17 @@ def normalize_video_evidence(evidence: str) -> tuple[str, bool]:
 
 def build_video_search_result(index: int, query: str, evidence: str) -> str:
     normalized, truncated = normalize_video_evidence(evidence)
-    return json.dumps(
-        {
-            "type": "video_search_result",
-            "trust": "untrusted_external_video_evidence",
-            "instruction_authority": "none",
-            "video_index": index,
-            "query": query,
-            "evidence": normalized,
-            "evidence_truncated": truncated,
-        },
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
+    payload = {
+        "type": "video_search_result",
+        "trust": "untrusted_external_video_evidence",
+        "instruction_authority": "none",
+        "video_index": index,
+        "query": query,
+        "evidence": normalized,
+    }
+    if truncated:
+        payload["evidence_truncated"] = True
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
 def parse_video_index(value: object) -> int | None:
