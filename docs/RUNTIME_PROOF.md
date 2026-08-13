@@ -1,182 +1,221 @@
-# 运行证据：CALL-SEAM-01
+# 运行证据：CALL-SEAM-01 / ITERATIVE-LOOP-01
 
-目标：确认本插件在实际部署环境中应复用的 AstrBot → 视频模型卡调用缝。
+更新时间：2026-08-13。
 
-这不是视频能力测试；前提已经是“被选模型卡具备视频读取能力”。本记录只回答：插件应该通过哪个已有 AstrBot 入口，把当前 `Video` 与一次自然语言子查询交给该模型卡。
+## 结论
 
-## 上游静态证据结论
+两个核心运行问题均已通过真实环境闭合：
 
-AstrBot PR #9424 已经给出了目前最明确的统一视频请求契约候选：
+1. **CALL-SEAM-01：CLOSED** — 视频查询工具能够沿 AstrBot 当前宿主视频契约把同一个 `Video` 交给已配置的视频模型卡并取得真实视频证据；
+2. **ITERATIVE-LOOP-01：CLOSED** — AstrBot 自己的 `ToolLoopAgentRunner` 能驱动主模型先后产生两个不同的 `query_video` 查询，读取第一次工具结果后继续第二次查询，再综合证据形成最终回答。
+
+当前已验证主链：
+
+```text
+用户任务 + AstrBot Video
+→ AstrBot ToolLoopAgentRunner
+→ 主模型调用 query_video(问题 A)
+→ QueryVideoTool
+→ AstrBot 当前视频附件宿主契约
+→ 视频能力 Provider / 模型
+→ 证据 A 返回 Tool Loop
+→ 主模型生成不同的问题 B
+→ query_video(问题 B)
+→ 证据 B
+→ 主模型最终回答
+```
+
+视频搜索插件自身不实现供应商 SDK、媒体上传器、Agent 循环或第二套视频会话。
+
+## 当前宿主视频契约
+
+AstrBot v4.27.3 与验证时的当前 master 运行探针均得到：
+
+```text
+PROVIDER_REQUEST_HAS_VIDEO_URLS=False
+```
+
+因此当前插件使用 AstrBot 已经存在的可信当前请求视频附件形态：
+
+```text
+[Video Attachment: name <name>, path <path>]
+```
+
+引用视频：
+
+```text
+[Video Attachment in quoted message: name <name>, path <path>]
+```
+
+这些内容由已经绑定的 AstrBot `Video` 组件生成，并通过 `extra_user_content_parts` 传递，不从普通用户文本中解析任意本地路径。
+
+`transport.py` 只适配 AstrBot 宿主契约：
+
+```text
+宿主未来有 ProviderRequest.video_urls
+→ 使用 video_urls
+
+当前宿主没有
+→ 使用 AstrBot 当前可信 Video Attachment 信封
+```
+
+它不判断 Google、火山、MiniMax 等供应商品牌。
+
+## 上游未来方向
+
+AstrBot PR #9424 提议把视频提升为统一 Provider 输入：
 
 ```text
 Video
-→ convert_to_file_path()
 → ProviderRequest.video_urls
 → video_url content block
 → Provider
 ```
 
-其中 OpenAI-compatible Provider 在该 PR 中显式新增 `video_urls` 参数，并将其物化成 `data:video/...;base64,...`；Anthropic Provider则把统一 `video_url` 内容块转换为 Anthropic 的 `video` block。
+截至本次验证该 PR 仍未合并，所以当前实现不能把该接口当成稳定宿主事实；但 `transport.py` 已为宿主未来出现原生字段保留自动切换。
 
-但是，截至 2026-08-13：
+## 真实 AstrBot 宿主矩阵
 
-- PR #9424 仍是 open；
-- `merged=false`；
-- 公开稳定主干尚不能据此假定所有 Provider 都实现了 `video_urls`；
-- 该 PR 不修改 `gemini_source.py`。
+工作流：`Real AstrBot Runtime Matrix`。
 
-因此，本项目采用下列证据等级：
+S1 宿主传输隔离、S3 引用/多视频绑定测试完成后的运行：
 
 ```text
-上游统一契约候选：video_urls       已确认
-当前公开稳定版全 Provider 可用：     未确认
-实际部署中的所选视频模型卡可用：     待运行确认
+run #6 / 31708806935
+result: success
 ```
 
-## 首选插件调用形式
+| AstrBot ref | clone | uv sync | init | 插件安装 | compile/pytest | 接口探针 | AstrBot 启动/加载 | 结果 |
+|---|---|---|---|---|---|---|---|---|
+| `v4.27.3` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | success |
+| `master` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | success |
 
-若实际部署中的所选 Provider 已消费 `video_urls`，第一版应优先使用下面这条薄调用链：
+这证明当前开发分支在两个真实宿主中仍可安装、测试、启动和加载。
 
-```python
-video_path = await bound_video.component.convert_to_file_path()
+## 真实 Provider / 视频内容证据
 
-response = await context.llm_generate(
-    chat_provider_id=video_search_provider_id,
-    prompt=video_query_prompt,
-    video_urls=[video_path],
-)
-```
+火山方舟仓库临时证据分支：`test/video-semantic-search-e2e`。
 
-理由：
+Repository Secret `HUOSHANYINQINGAPI` 仅通过 GitHub Actions 环境变量注入，不写入代码或 artifact。
 
-1. `Context.llm_generate()` 已经是 AstrBot 给插件调用已有模型卡的公共入口；
-2. 它会把额外的 `**kwargs` 继续转发给目标 Provider；
-3. `video_urls` 是上游 PR #9424 已经提出并测试的统一请求字段；
-4. 插件因此无需知道 Google、MiniMax、火山或其他 Provider 的私有请求体。
-
-如果实际环境不是通过 `video_urls` 工作，则只记录 AstrBot/Provider 已经提供的**等价统一入口**；不得在本插件内新增供应商特判。
-
-## 环境记录
-
-- AstrBot 版本/commit：
-- 插件版本：
-- 平台：
-- 视频搜索模型卡 ID：
-- Provider 类型：
-- 模型名：
-
-## 测试视频
-
-使用 5～8 秒、无隐私内容的固定样本：
+真实模型：
 
 ```text
-0-2 秒：ALPHA
-2-4 秒：BETA
-4-6 秒：GAMMA
-音轨：ONE / TWO / THREE
+doubao-seed-2-1-pro-260628
 ```
 
-## 查询 A：视觉顺序
+固定 6 秒测试视频：
 
 ```text
-画面依次出现了哪三个单词？
+00:00-00:02  ALPHA
+00:02-00:04  BETA
+00:04-00:06  GAMMA
 ```
 
-预期：模型能够回答 `ALPHA → BETA → GAMMA`。
+### L5：同一视频重复直接查询
 
-## 查询 B：第二次独立查询
-
-在同一个视频对象上再次调用同一接口：
+工作流：`Live Video Semantic Search E2E`
 
 ```text
-第二个出现的单词是什么？
+run #1 / 31705763398
+result: success
 ```
 
-预期：模型回答 `BETA`。
+同一 `Video` 的两次 `QueryVideoTool` 调用分别真实返回：
 
-这里的核心验收不是内容难度，而是证明“同一 Video 可以被主模型通过同一个 query_video 工具反复提问”。
+- 开头区间 → `ALPHA`；
+- 中段区间 → `BETA`。
 
-## 需要记录的调用缝
+Provider 日志同时确认请求真实进入 Ark Chat Completions，并包含 `video_url` 视频块。
 
-### 1. AstrBot 提供给插件的视频对象
+## L6：真实 AstrBot Tool Loop
+
+工作流：`Live Video Semantic Search Tool Loop`
+
+第一次运行 `31709376019` 在进入任何模型调用前因测试脚本缺少 sibling repo Python import path 失败；该失败只属于测试装载层。
+
+修正 `PYTHONPATH` 后：
 
 ```text
-组件类型：Video
-组件关键字段：
-convert_to_file_path() 结果形态：
+run #2 / 31709608070
+result: success
+artifact: live-video-semantic-search-tool-loop
 ```
 
-### 2. 插件调用的 AstrBot 公共入口
+执行器：
 
 ```text
-方法名：
-所属对象：
-关键参数：
+AstrBot ToolLoopAgentRunner
++ FunctionToolExecutor
++ QueryVideoTool
 ```
 
-首选候选：
+实际记录到的第一次工具调用：
 
 ```text
-Context.llm_generate(..., video_urls=[...])
+query: What large word is prominently displayed in the video around 00:00-00:02?
+time_range: 00:00-00:02
 ```
 
-### 3. 视频参数的实际形态
-
-只记录结构，不记录密钥或敏感 URL：
+工具结果：
 
 ```text
-参数名/内容块类型：
-值是本地路径 / URL / file id / 其他：
+ALPHA
 ```
 
-### 4. Provider 侧观察
+实际记录到的第二次工具调用：
 
 ```text
-Provider 是否成功接收视频：
-是否发生上传/转换：
-该动作由 AstrBot/Provider 哪一层执行：
-本插件是否保持供应商无关：是 / 否
+query: What large word is prominently displayed in the video around 00:02-00:04?
+time_range: 00:02-00:04
 ```
 
-### 5. 返回结果
+工具结果：
 
 ```text
-查询 A 返回：
-查询 B 返回：
+BETA
 ```
 
-## 判定
+两次查询文本不同；第二次工具调用是在第一次工具结果已经返回 Tool Loop 后产生。
 
-成功标准：
+主模型最终回答：
 
-1. 不直接调用 Google/Gemini、MiniMax、火山或其他供应商 SDK；
-2. 不由本插件实现上传器或媒体转码；
-3. 通过 AstrBot 已有 Provider/Context 调用链完成；
-4. 视频模型正确回答测试视频中的事实；
-5. 同一入口可以只替换查询文本再次调用；
-6. 插件没有保存另一套视频对话状态；
-7. 主模型的 Tool Loop 可以使用第一次工具结果决定第二次查询。
+```text
+FIRST=ALPHA; SECOND=BETA
+```
 
-## 如果 `video_urls` 在当前环境失败
+因此已经客观证明：
 
-只允许得到以下结论：
+> 主模型可以把视频当作有界可搜索信息空间，在 AstrBot 原有 Agent Tool Loop 中通过“提出子问题 → 读取视频证据 → 继续提出不同子问题 → 综合回答”的循环完成任务。
 
-> 当前所选 AstrBot/Provider 版本没有通过该统一候选字段消费视频，需确认实际环境已经存在的等价视频入口或等待上游统一契约落地。
+## 当前通过项
 
-禁止自动采取：
+- 插件不直接调用供应商 SDK：✅
+- 插件不实现供应商请求体：✅
+- 宿主传输契约独立于供应商品牌：✅
+- 当前消息视频绑定：✅
+- 多视频顺序绑定：✅
+- 引用视频绑定与引用信封：✅
+- 无视频/索引越界失败封闭：✅
+- 同一视频多次直接查询：✅
+- 真 `ToolLoopAgentRunner` 连续两次不同查询：✅
+- 第一次证据 ALPHA：✅
+- 第二次证据 BETA：✅
+- 最终主模型综合两份证据：✅
+- AstrBot v4.27.3 / master 真实安装与启动：✅
 
-- 直接调用供应商 SDK；
-- 在插件里写 Google/MiniMax/火山分支；
-- 自动抽帧代替视频输入；
-- 因此断言“模型没有视频能力”。
+## 仍未外推的范围
+
+本次证据不证明：
+
+- 所有 Provider 已有视频通道；
+- 所有火山模型都支持视频；
+- Gemini/MiniMax 等其他 Provider 已做相同端到端验证；
+- 长视频、复杂音轨、跨轮永久视频引用已验收；
+- 当前模型能力未来永久不变。
+
+这些必须分别通过对应运行证据建立，不能从本次成功外推。
 
 ## 脱敏要求
 
-提交运行结果前删除：
-
-- API Key；
-- Authorization Header；
-- 带签名的临时 URL；
-- 本地用户名路径；
-- QQ/群聊/用户隐私标识；
-- 真实私人视频内容。
+证据不得持久化 API Key、Authorization Header、用户隐私标识或真实私人视频。本次 L5/L6 使用的是工作流现场生成的合成 ALPHA/BETA/GAMMA 视频。

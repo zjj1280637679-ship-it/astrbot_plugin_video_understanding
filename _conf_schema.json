@@ -1,0 +1,15 @@
+{
+  "enabled": {
+    "description": "启用视频语义搜索工具",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后，仅在当前或引用消息中存在视频时向本轮主模型请求挂载 query_video；工具只在主模型主动调用时才读取视频。"
+  },
+  "video_search_provider_id": {
+    "description": "视频搜索模型",
+    "type": "string",
+    "default": "",
+    "_special": "select_provider",
+    "hint": "选择 AstrBot 中已经配置好的、具有视频读取能力的模型卡。本插件不管理 API Key、Base URL 或供应商请求体。"
+  }
+}
