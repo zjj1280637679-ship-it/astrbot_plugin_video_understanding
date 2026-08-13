@@ -10,6 +10,7 @@ on:
       - tool.py
       - transport.py
       - video_binding.py
+      - video_path_cache.py
       - tests/**
 
 permissions:
@@ -34,7 +35,7 @@ jobs:
       - run: uv sync --directory AstrBot
       - name: Run complete test directory
         run: uv run --directory AstrBot python -m pytest "$GITHUB_WORKSPACE/tests" -q
-      - name: Probe bounded evidence contract
+      - name: Probe bounded neutral query contract
         shell: bash
         run: |
           PYTHONPATH="$GITHUB_WORKSPACE/.." uv run --directory AstrBot python - <<'PY'
@@ -48,9 +49,14 @@ jobs:
           large = json.loads(build_video_search_result(0, "q", "A" * (MAX_EVIDENCE_CHARS + 1000)))
           assert large["evidence_truncated"] is True
           assert len(large["evidence"]) <= MAX_EVIDENCE_CHARS
+          assert large["evidence"].endswith("[query_video: result truncated]")
 
           tool = QueryVideoTool(provider_id="probe")
-          policy = (tool.description + tool.parameters["properties"]["query"]["description"]).lower()
-          assert "minimum" in policy and "private" in policy
+          policy = (tool.description + " " + tool.parameters["properties"]["query"]["description"]).lower()
+          assert "same video" in policy
+          assert "main model decides" in policy
+          assert "focused" not in policy
+          assert "minimum" not in policy
+          assert "narrower" not in policy
           print("HARDENING_PROBE=PASS")
           PY
