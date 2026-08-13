@@ -15,6 +15,14 @@ astrbot_plugin_video_understanding/
 
 第一版不引入额外视频处理依赖。
 
+## 已收敛的调用缝
+
+上游 PR #9424 已把 `video_urls` / `video_url` 定义为与 `image_urls` / `audio_urls` 同构的视频输入契约候选，并为 OpenAI-compatible、Anthropic 路径补了实现与测试；该 PR 截至 2026-08-13 仍未合并，而且没有修改 Gemini Provider。
+
+因此第一版的实现顺序改为：**优先在实际部署环境验证 `Context.llm_generate(..., video_urls=[video_path])` 是否已经由所选视频模型卡消费；如果当前环境使用另一条已经存在的供应商无关统一入口，则记录并复用该入口；不得在本插件中增加供应商专用分支。**
+
+详见 `EVIDENCE.md`、`RUNTIME_PROOF.md`、`UPSTREAM_COMPATIBILITY.md`。
+
 ## `main.py`
 
 职责：
@@ -81,7 +89,8 @@ class BoundVideo:
 2. 从当前 Agent Event 中取得绑定视频；
 3. 将 AstrBot 视频引用按 `CALL-SEAM-01` 证明出的官方/既有入口传给管理员选择的视频模型卡；
 4. 返回模型文本结果；
-5. 不生成最终用户回答。
+5. 不生成最终用户回答；
+6. 不维护独立的视频问答历史，连续搜索的上下文由 AstrBot 主 Agent Tool Loop 保存。
 
 伪代码：
 
@@ -112,7 +121,7 @@ class QueryVideoTool(FunctionTool[AstrAgentContext]):
         return await call_video_provider_through_astrbot(...)
 ```
 
-`call_video_provider_through_astrbot(...)` 的具体视频参数必须由 `RUNTIME_PROOF.md / CALL-SEAM-01` 确认后再填写，不提前猜测。
+`call_video_provider_through_astrbot(...)` 首选验证的实现形态是：取得 `Video.convert_to_file_path()` 的结果后，通过 AstrBot `Context.llm_generate` 把该路径放入 `video_urls`；只有 `RUNTIME_PROOF.md` 运行证据确认后才把这一候选固化为最低版本依赖。
 
 ## `_conf_schema.json`
 
@@ -168,16 +177,17 @@ class QueryVideoTool(FunctionTool[AstrAgentContext]):
 - 多模型投票；
 - 抽帧/OCR/STT；
 - Provider 自动切换；
-- 自动能力探测。
+- 自动能力探测；
+- 供应商私有视频上传或请求体适配。
 
 ## 开发顺序
 
 ```text
-A. 完成 CALL-SEAM-01
+A. 在实际部署环境完成 CALL-SEAM-01，优先验证 video_urls
 B. 写 video_binding.py + 单测
 C. 写 QueryVideoTool 的纯错误路径 + 单测
 D. 接入已证明的视频 Provider 调用缝
 E. 注入 Tool 到现有 Agent ToolSet
-F. 完成双查询端到端测试
+F. 完成同一视频两次不同 query_video 调用的端到端测试
 G. 再考虑 README、市场说明和版本发布
 ```
