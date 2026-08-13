@@ -40,17 +40,10 @@ def build_video_search_system_prompt(unavailable_token: str) -> str:
     )
 
 
-def build_video_query_prompt(
-    query: str,
-    time_range: str = "",
-    unavailable_token: str | None = None,
-) -> str:
+def build_video_query_prompt(query: str, time_range: str = "") -> str:
     focus = str(time_range or "").strip()
     range_text = focus if focus else "not specified; inspect the video as needed"
-    parts = [f"Search query: {query}", f"Optional time range: {range_text}"]
-    if unavailable_token:
-        parts.append(f"Transport nonce: {unavailable_token}")
-    return "\n".join(parts)
+    return f"Search query: {query}\nOptional time range: {range_text}"
 
 
 def normalize_video_evidence(evidence: str) -> tuple[str, bool]:
@@ -186,11 +179,7 @@ class QueryVideoTool(FunctionTool[AstrAgentContext]):
             return "VIDEO_QUERY_ERROR: AstrBot could not resolve the selected video"
 
         unavailable_token = build_video_unavailable_token()
-        prompt = build_video_query_prompt(
-            query=query,
-            time_range=time_range,
-            unavailable_token=unavailable_token,
-        )
+        prompt = build_video_query_prompt(query=query, time_range=time_range)
         system_prompt = build_video_search_system_prompt(unavailable_token)
         try:
             response = await astrbot_context.llm_generate(
