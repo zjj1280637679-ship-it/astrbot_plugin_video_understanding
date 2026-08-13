@@ -16,7 +16,7 @@ Video
 → Provider
 ```
 
-其中 OpenAI-compatible Provider 在该 PR 中显式新增 `video_urls` 参数，并将其物化成 `data:video/...;base64,...`；Anthropic Provider则把统一 `video_url` 内容块转换为 Anthropic 的 `video` block。
+其中 OpenAI-compatible Provider 在该 PR 中显式新增 `video_urls` 参数，并将其物化成 `data:video/...;base64,...`；Anthropic Provider 则把统一 `video_url` 内容块转换为 Anthropic 的 `video` block。
 
 但是，截至 2026-08-13：
 
@@ -30,12 +30,73 @@ Video
 ```text
 上游统一契约候选：video_urls       已确认
 当前公开稳定版全 Provider 可用：     未确认
-实际部署中的所选视频模型卡可用：     待运行确认
+实际部署中的所选视频模型卡可用：     待端到端运行确认
 ```
 
-## 首选插件调用形式
+## 真实 AstrBot 安装与加载证据（2026-08-13）
 
-若实际部署中的所选 Provider 已消费 `video_urls`，第一版应优先使用下面这条薄调用链：
+已在 GitHub Actions `Real AstrBot Runtime Matrix` 中沿用火山方舟供应商插件已验证的真实运行时安装方式：
+
+```text
+git clone AstrBot 指定 ref
+→ Python 3.12
+→ setup-uv
+→ uv sync --directory AstrBot
+→ astrbot init
+→ 将当前插件复制到 AstrBot/data/plugins
+→ 在该 AstrBot 环境执行 pytest
+→ 启动 astrbot run --port 6185
+```
+
+运行：`#1 / 31704222379`。
+
+矩阵结果：
+
+| AstrBot ref | clone | uv sync | init | 插件安装 | pytest | 接口探针 | AstrBot 启动/插件加载 | 结果 |
+|---|---|---|---|---|---|---|---|---|
+| `v4.27.3` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | success |
+| `master` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | success |
+
+真实启动日志均出现：
+
+```text
+Loading plugin astrbot_plugin_video_understanding ...
+Plugin astrbot_plugin_video_understanding (0.1.0) by 羊膜大人
+[video-semantic-search] tool not registered; enabled=True provider_configured=False
+```
+
+这证明插件在未配置视频搜索模型时能够在真实 AstrBot 中安全加载，并且不会错误注册一个不可执行的工具。
+
+### 实际宿主接口探针
+
+`v4.27.3`：
+
+```text
+PROVIDER_REQUEST_HAS_VIDEO_URLS=False
+CONTEXT_LLM_GENERATE_SIGNATURE=(..., image_urls=None, audio_urls=None, ..., **kwargs)
+GEMINI_TEXT_CHAT_SIGNATURE=(..., image_urls=None, audio_urls=None, ..., **kwargs)
+GEMINI_ASSEMBLE_CONTEXT_SIGNATURE=(self, text, image_urls=None, audio_urls=None, extra_user_content_parts=None)
+```
+
+同一次运行对当前 `master` 的探针结果相同：
+
+```text
+PROVIDER_REQUEST_HAS_VIDEO_URLS=False
+CONTEXT_LLM_GENERATE_SIGNATURE=(..., image_urls=None, audio_urls=None, ..., **kwargs)
+GEMINI_TEXT_CHAT_SIGNATURE=(..., image_urls=None, audio_urls=None, ..., **kwargs)
+GEMINI_ASSEMBLE_CONTEXT_SIGNATURE=(self, text, image_urls=None, audio_urls=None, extra_user_content_parts=None)
+```
+
+因此已经得到两个彼此独立的事实：
+
+1. **插件运行时兼容性成立**：v4.27.3 和当前 master 都能真实安装、执行单测、启动并加载插件。
+2. **统一视频传输缝尚未在这两个宿主中成立**：`ProviderRequest.video_urls` 不存在，内置 Gemini 的公开 `assemble_context` 也没有视频参数。
+
+后者不能被解释成“Gemini 模型没有视频能力”，只能说明这两个 AstrBot 宿主版本没有通过当前候选统一字段把视频送入该 Provider。
+
+## 当前插件调用形式
+
+开发分支当前保留上游方向一致的候选调用：
 
 ```python
 video_path = await bound_video.component.convert_to_file_path()
@@ -47,27 +108,13 @@ response = await context.llm_generate(
 )
 ```
 
-理由：
+真实 AstrBot 环境中的单元测试已经证明 `QueryVideoTool` 会把解析后的本地视频路径作为 `video_urls=[...]` 传给 `Context.llm_generate`；但由于当前 v4.27.3/master 的宿主 Provider 请求链尚未消费这一字段，这一测试只能证明**插件侧契约实现正确**，不能伪装成“视频已经真实到达 Gemini”。
 
-1. `Context.llm_generate()` 已经是 AstrBot 给插件调用已有模型卡的公共入口；
-2. 它会把额外的 `**kwargs` 继续转发给目标 Provider；
-3. `video_urls` 是上游 PR #9424 已经提出并测试的统一请求字段；
-4. 插件因此无需知道 Google、MiniMax、火山或其他 Provider 的私有请求体。
+如果实际部署中的某个已有 Provider 已消费 `video_urls`，这条调用即可直接形成端到端链路；如果实际环境使用另一条供应商无关的 AstrBot 统一入口，则应只替换这里的宿主接口，不在插件中新增供应商私有实现。
 
-如果实际环境不是通过 `video_urls` 工作，则只记录 AstrBot/Provider 已经提供的**等价统一入口**；不得在本插件内新增供应商特判。
+## 固定端到端测试素材
 
-## 环境记录
-
-- AstrBot 版本/commit：
-- 插件版本：
-- 平台：
-- 视频搜索模型卡 ID：
-- Provider 类型：
-- 模型名：
-
-## 测试视频
-
-使用 5～8 秒、无隐私内容的固定样本：
+待统一视频输入宿主成立后，使用 5～8 秒、无隐私内容的固定样本：
 
 ```text
 0-2 秒：ALPHA
@@ -76,78 +123,23 @@ response = await context.llm_generate(
 音轨：ONE / TWO / THREE
 ```
 
-## 查询 A：视觉顺序
+查询 A：
 
 ```text
 画面依次出现了哪三个单词？
 ```
 
-预期：模型能够回答 `ALPHA → BETA → GAMMA`。
-
-## 查询 B：第二次独立查询
-
-在同一个视频对象上再次调用同一接口：
+查询 B：
 
 ```text
 第二个出现的单词是什么？
 ```
 
-预期：模型回答 `BETA`。
+完整 CALL-SEAM-01 只有在真实视频模型分别回答 `ALPHA → BETA → GAMMA` 和 `BETA` 后才算闭合。
 
-这里的核心验收不是内容难度，而是证明“同一 Video 可以被主模型通过同一个 query_video 工具反复提问”。
+## 成功标准
 
-## 需要记录的调用缝
-
-### 1. AstrBot 提供给插件的视频对象
-
-```text
-组件类型：Video
-组件关键字段：
-convert_to_file_path() 结果形态：
-```
-
-### 2. 插件调用的 AstrBot 公共入口
-
-```text
-方法名：
-所属对象：
-关键参数：
-```
-
-首选候选：
-
-```text
-Context.llm_generate(..., video_urls=[...])
-```
-
-### 3. 视频参数的实际形态
-
-只记录结构，不记录密钥或敏感 URL：
-
-```text
-参数名/内容块类型：
-值是本地路径 / URL / file id / 其他：
-```
-
-### 4. Provider 侧观察
-
-```text
-Provider 是否成功接收视频：
-是否发生上传/转换：
-该动作由 AstrBot/Provider 哪一层执行：
-本插件是否保持供应商无关：是 / 否
-```
-
-### 5. 返回结果
-
-```text
-查询 A 返回：
-查询 B 返回：
-```
-
-## 判定
-
-成功标准：
+最终端到端成功必须同时满足：
 
 1. 不直接调用 Google/Gemini、MiniMax、火山或其他供应商 SDK；
 2. 不由本插件实现上传器或媒体转码；
