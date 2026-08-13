@@ -1,0 +1,56 @@
+name: Hardening Regression Gate
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/query-video-tool-v0.1]
+    paths:
+      - .github/workflows/hardening-regression.yml
+      - main.py
+      - tool.py
+      - transport.py
+      - video_binding.py
+      - tests/**
+
+permissions:
+  contents: read
+
+jobs:
+  hardening:
+    strategy:
+      fail-fast: false
+      matrix:
+        astrbot_ref: [v4.27.3, master]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - run: git clone --depth 1 --branch '${{ matrix.astrbot_ref }}' https://github.com/AstrBotDevs/AstrBot.git AstrBot
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
+        with:
+          enable-cache: false
+      - run: uv sync --directory AstrBot
+      - name: Run complete test directory
+        run: uv run --directory AstrBot python -m pytest "$GITHUB_WORKSPACE/tests" -q
+      - name: Probe bounded evidence contract
+        shell: bash
+        run: |
+          PYTHONPATH="$GITHUB_WORKSPACE/.." uv run --directory AstrBot python - <<'PY'
+          import json
+          from astrbot_plugin_video_understanding.tool import MAX_EVIDENCE_CHARS, QueryVideoTool, build_video_search_result
+
+          normal = json.loads(build_video_search_result(0, "q", "ALPHA"))
+          assert normal["evidence"] == "ALPHA"
+          assert "evidence_truncated" not in normal
+
+          large = json.loads(build_video_search_result(0, "q", "A" * (MAX_EVIDENCE_CHARS + 1000)))
+          assert large["evidence_truncated"] is True
+          assert len(large["evidence"]) <= MAX_EVIDENCE_CHARS
+
+          tool = QueryVideoTool(provider_id="probe")
+          policy = (tool.description + tool.parameters["properties"]["query"]["description"]).lower()
+          assert "minimum" in policy and "private" in policy
+          print("HARDENING_PROBE=PASS")
+          PY
