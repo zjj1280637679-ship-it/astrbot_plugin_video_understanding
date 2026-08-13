@@ -7,8 +7,6 @@ from typing import Literal
 from astrbot.api.event import AstrMessageEvent
 from astrbot.api.message_components import Reply, Video
 
-VIDEO_BINDINGS_EXTRA_KEY = "video_semantic_search_bindings"
-
 
 @dataclass(slots=True)
 class BoundVideo:
@@ -28,6 +26,7 @@ def _display_name(video: Video, fallback: str) -> str:
 
 def bind_videos_from_event(event: AstrMessageEvent) -> list[BoundVideo]:
     """Bind current videos first, then videos embedded in replies."""
+
     bound: list[BoundVideo] = []
 
     for component in event.message_obj.message:
@@ -58,24 +57,3 @@ def bind_videos_from_event(event: AstrMessageEvent) -> list[BoundVideo]:
                 )
 
     return bound
-
-
-def build_video_search_notice(
-    videos: list[BoundVideo], *, require_query_before_claim: bool
-) -> str:
-    entries = ", ".join(
-        f"{video.index}:{video.source}:{video.display_name}" for video in videos
-    )
-    requirement = (
-        "Before stating a video-dependent fact, call query_video at least once."
-        if require_query_before_claim
-        else "Use query_video when the answer needs evidence from the video."
-    )
-    return (
-        "<video_search_context>\n"
-        f"Available videos: {entries}\n"
-        "query_video can be called repeatedly. Its output is evidence for your reasoning.\n"
-        f"{requirement}\n"
-        "If a result is insufficient, ask a narrower follow-up query instead of guessing.\n"
-        "</video_search_context>"
-    )
