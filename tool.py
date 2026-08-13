@@ -40,13 +40,17 @@ def build_video_search_system_prompt(unavailable_token: str) -> str:
     )
 
 
-def build_video_query_prompt(query: str, time_range: str = "") -> str:
+def build_video_query_prompt(
+    query: str,
+    time_range: str = "",
+    unavailable_token: str | None = None,
+) -> str:
     focus = str(time_range or "").strip()
     range_text = focus if focus else "not specified; inspect the video as needed"
-    return (
-        f"Search query: {query}\n"
-        f"Optional time range: {range_text}"
-    )
+    parts = [f"Search query: {query}", f"Optional time range: {range_text}"]
+    if unavailable_token:
+        parts.append(f"Transport nonce: {unavailable_token}")
+    return "\n".join(parts)
 
 
 def normalize_video_evidence(evidence: str) -> tuple[str, bool]:
@@ -135,11 +139,7 @@ class QueryVideoTool(FunctionTool[AstrAgentContext]):
     )
     provider_id: str = ""
 
-    async def call(
-        self,
-        context: ContextWrapper[AstrAgentContext],
-        **kwargs,
-    ) -> ToolExecResult:
+    async def call(self, context: ContextWrapper[AstrAgentContext], **kwargs) -> ToolExecResult:
         query = str(kwargs.get("query") or "").strip()
         if not query:
             return "VIDEO_QUERY_ERROR: query is empty"
@@ -154,10 +154,7 @@ class QueryVideoTool(FunctionTool[AstrAgentContext]):
 
         time_range = str(kwargs.get("time_range") or "").strip()
         if len(time_range) > MAX_TIME_RANGE_CHARS:
-            return (
-                "VIDEO_QUERY_ERROR: time_range exceeds "
-                f"{MAX_TIME_RANGE_CHARS} characters"
-            )
+            return f"VIDEO_QUERY_ERROR: time_range exceeds {MAX_TIME_RANGE_CHARS} characters"
 
         agent_context = context.context
         event = agent_context.event
@@ -174,7 +171,6 @@ class QueryVideoTool(FunctionTool[AstrAgentContext]):
         bound = bindings[index]
         if not isinstance(bound, BoundVideo):
             return "VIDEO_QUERY_ERROR: invalid video binding"
-
         provider_id = str(self.provider_id or "").strip()
         if not provider_id:
             return "VIDEO_QUERY_ERROR: video search model is not configured"
@@ -190,7 +186,11 @@ class QueryVideoTool(FunctionTool[AstrAgentContext]):
             return "VIDEO_QUERY_ERROR: AstrBot could not resolve the selected video"
 
         unavailable_token = build_video_unavailable_token()
-        prompt = build_video_query_prompt(query=query, time_range=time_range)
+        prompt = build_video_query_prompt(
+            query=query,
+            time_range=time_range,
+            unavailable_token=unavailable_token,
+        )
         system_prompt = build_video_search_system_prompt(unavailable_token)
         try:
             response = await astrbot_context.llm_generate(
