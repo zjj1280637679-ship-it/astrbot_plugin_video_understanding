@@ -1,25 +1,30 @@
 # Changelog
 
-## 0.1.0 - 2026-08-13
+## 0.1.0 - 2026-08-14
 
 ### Added
 
-- 新增 `query_video` 视频语义搜索工具；主模型可围绕当前问题反复查询同一个视频，而不是依赖一次性通用摘要。
-- 支持当前消息中的多个视频，按出现顺序使用 `video_index` 编号。
-- 支持 `Reply.chain` 中的引用视频；当前消息视频优先于引用视频。
-- 新增 `time_range` 可选参数，用于让主模型聚焦特定视频区间。
-- 新增 AstrBot 宿主视频传输适配层：当前 v4.27.x 使用可信 `Video Attachment` 内容形态，未来宿主提供原生 `ProviderRequest.video_urls` 时可切换到统一字段。
-- 视频查询结果明确标记为证据材料，视频中的字幕、对白、代码和命令不提升为主模型指令。
-- 对无视频、索引越界、视频解析失败、Provider 调用失败、空响应和视频未实际到达模型等情况实行失败封闭。
+- 新增 `query_video` 对话式视频搜索工具；主模型可反复向管理员选择的已有视频能力模型卡提问。
+- 同一次 AstrBot event / Agent run 中，同一 `provider_id + video_index` 保留原始成功 Q/A，并通过 AstrBot 原生 `contexts` 回放给视频模型。
+- 后续查询可自然使用“它 / 之前 / 刚才那个”等指代；历史不摘要、不改写，不同视频/Provider 隔离，event 结束后自然失效。
+- 支持当前消息多个视频与 `Reply.chain` 引用视频；`time_range` 仅作为注意力提示。
+- 复用 AstrBot / Provider 已有视频传输，并在同一 event 中复用已解析视频路径。
+
+### Design
+
+- 插件不做视频智能增强。理解深度由用户问题与视频模型自身能力决定。
+- 不限制直接观察/因果/综合分析，不自动摘要、不自动分解问题、不替主模型规划下一问。
+- 主模型决定问什么、问多深、是否继续；视频模型负责理解视频；插件只维持通道和上下文连续性。
 
 ### Verified
 
-- AstrBot `v4.27.3` 真实安装、pytest、启动和插件加载通过。
-- 验证时 AstrBot `master` 真实安装、pytest、启动和插件加载通过。
-- 真实火山方舟视频链路中，同一个 6 秒视频两次查询分别正确返回 `ALPHA` 与 `BETA`。
-- AstrBot `ToolLoopAgentRunner` 真实驱动主模型先后发出两个不同的 `query_video` 查询，并最终输出 `FIRST=ALPHA; SECOND=BETA`。
+- 当前业务 runtime：`d5f4742e114771669a7e969a8eb6e62d3bffa883`。
+- AstrBot `v4.27.3` 与验证时 `master`：真实安装、完整 tests、启动和插件加载通过。
+- 真实火山方舟模型 `doubao-seed-2-1-pro-260628`：第一问得到 `GAMMA`，第二问只用指代且不重述 `GAMMA`，视频模型通过此前 Q/A contexts 返回 `BETA`。
+- 真实 AstrBot `ToolLoopAgentRunner` 中，主模型自主产生上述依赖视频模型记忆的第二问，最终回答 `REFERENT=GAMMA; BEFORE=BETA`。
+- 最终上下文 E2E：run `31735526223`。
 
 ### Scope
 
-- 0.1.0 不包含跨后续消息的永久视频资产绑定、长视频自动分段、OCR/STT/抽帧降级、独立 Agent 循环或供应商专属 SDK。
-- 当前真实端到端 Provider 验证覆盖火山方舟；其他视频 Provider 需要各自运行证据，不能从该结果外推。
+- 不包含永久视频会话数据库、自动理解增强、OCR/STT/抽帧降级、独立 Agent Loop 或供应商专属 SDK。
+- 当前真实 Provider E2E 只覆盖火山方舟，其他 Provider 需要独立运行证据。
