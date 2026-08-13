@@ -13,7 +13,11 @@ from astrbot.core.astr_agent_context import AstrAgentContext
 
 from .transport import build_video_transport_kwargs
 from .video_binding import BoundVideo, bind_videos_from_event
-from .video_path_cache import resolve_bound_video_path
+from .video_path_cache import (
+    append_video_query_turn,
+    get_video_query_contexts,
+    resolve_bound_video_path,
+)
 
 VIDEO_INPUT_UNAVAILABLE = "VIDEO_INPUT_UNAVAILABLE"
 MAX_QUERY_CHARS = 8000
@@ -201,12 +205,14 @@ class QueryVideoTool(FunctionTool[AstrAgentContext]):
         unavailable_token = build_video_unavailable_token()
         prompt = build_video_query_prompt(query=query, time_range=time_range)
         system_prompt = build_video_search_system_prompt(unavailable_token)
+        contexts = get_video_query_contexts(event, provider_id, index)
         transport_provider = await resolve_transport_provider(astrbot_context, provider_id)
         try:
             response = await astrbot_context.llm_generate(
                 chat_provider_id=provider_id,
                 prompt=prompt,
                 system_prompt=system_prompt,
+                contexts=contexts,
                 **build_video_transport_kwargs(
                     bound,
                     video_path,
@@ -232,4 +238,6 @@ class QueryVideoTool(FunctionTool[AstrAgentContext]):
                 "VIDEO_QUERY_ERROR: the configured model did not receive a usable "
                 "video through the current AstrBot provider path"
             )
+
+        append_video_query_turn(event, provider_id, index, prompt, text)
         return build_video_search_result(index=index, query=query, evidence=text)
