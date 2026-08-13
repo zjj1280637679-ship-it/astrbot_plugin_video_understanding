@@ -81,6 +81,25 @@ def parse_video_index(value: object) -> int | None:
     return None
 
 
+async def resolve_transport_provider(astrbot_context, provider_id: str):
+    async_getter = getattr(astrbot_context, "get_provider_by_id_async", None)
+    if callable(async_getter):
+        try:
+            return await async_getter(provider_id)
+        except Exception:
+            pass
+    getter = getattr(astrbot_context, "get_provider_by_id", None)
+    if callable(getter):
+        try:
+            provider = getter(provider_id)
+            if hasattr(provider, "__await__"):
+                provider = await provider
+            return provider
+        except Exception:
+            pass
+    return None
+
+
 @dataclass
 class QueryVideoTool(FunctionTool[AstrAgentContext]):
     name: str = "query_video"
@@ -181,12 +200,17 @@ class QueryVideoTool(FunctionTool[AstrAgentContext]):
         unavailable_token = build_video_unavailable_token()
         prompt = build_video_query_prompt(query=query, time_range=time_range)
         system_prompt = build_video_search_system_prompt(unavailable_token)
+        transport_provider = await resolve_transport_provider(astrbot_context, provider_id)
         try:
             response = await astrbot_context.llm_generate(
                 chat_provider_id=provider_id,
                 prompt=prompt,
                 system_prompt=system_prompt,
-                **build_video_transport_kwargs(bound, video_path),
+                **build_video_transport_kwargs(
+                    bound,
+                    video_path,
+                    provider=transport_provider,
+                ),
             )
         except Exception as exc:
             logger.warning(
@@ -207,5 +231,4 @@ class QueryVideoTool(FunctionTool[AstrAgentContext]):
                 "VIDEO_QUERY_ERROR: the configured model did not receive a usable "
                 "video through the current AstrBot provider path"
             )
-
         return build_video_search_result(index=index, query=query, evidence=text)
