@@ -1,0 +1,117 @@
+name: Real AstrBot Runtime Matrix
+
+on:
+  push:
+    branches:
+      - feat/query-video-tool-v0.1
+    paths:
+      - .github/workflows/real-astrbot-runtime.yml
+      - main.py
+      - tool.py
+      - video_binding.py
+      - _conf_schema.json
+      - metadata.yaml
+      - tests/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  runtime:
+    strategy:
+      fail-fast: false
+      matrix:
+        astrbot_ref: [v4.27.3, master]
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Clone AstrBot
+        run: git clone --depth 1 --branch '${{ matrix.astrbot_ref }}' https://github.com/AstrBotDevs/AstrBot.git AstrBot
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          enable-cache: false
+      - name: Install exact AstrBot runtime
+        run: uv sync --directory AstrBot
+      - name: Initialize clean AstrBot data directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          touch AstrBot/.astrbot
+          printf '\n' | uv run --directory AstrBot astrbot init
+      - name: Install plugin into AstrBot
+        shell: bash
+        run: |
+          set -euo pipefail
+          target='AstrBot/data/plugins/astrbot_plugin_video_understanding'
+          rm -rf "$target"
+          mkdir -p "$target"
+          rsync -a \
+            --exclude '.git' \
+            --exclude '.github' \
+            --exclude 'AstrBot' \
+            --exclude 'tests' \
+            --exclude 'docs' \
+            ./ "$target"/
+          test -f "$target/main.py"
+          test -f "$target/tool.py"
+          test -f "$target/video_binding.py"
+          test -f "$target/metadata.yaml"
+      - name: Compile plugin
+        run: python -m compileall -q main.py tool.py video_binding.py tests
+      - name: Run plugin unit tests inside AstrBot environment
+        run: uv run --directory AstrBot python -m pytest "$GITHUB_WORKSPACE/tests/test_video_semantic_search.py" -q
+      - name: Probe real host interfaces
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p runtime-evidence
+          ASTRBOT_REF='${{ matrix.astrbot_ref }}' uv run --directory AstrBot python - <<'PY' | tee runtime-evidence/host-contract.txt
+          import dataclasses
+          import inspect
+          import os
+
+          from astrbot.core.provider.entities import ProviderRequest
+          from astrbot.core.star.context import Context
+          from astrbot.core.provider.sources.gemini_source import ProviderGoogleGenAI
+
+          ref = os.environ['ASTRBOT_REF']
+          fields = {f.name for f in dataclasses.fields(ProviderRequest)}
+          print(f'ASTRBOT_REF={ref}')
+          print(f'PROVIDER_REQUEST_HAS_VIDEO_URLS={"video_urls" in fields}')
+          print(f'CONTEXT_LLM_GENERATE_SIGNATURE={inspect.signature(Context.llm_generate)}')
+          print(f'GEMINI_TEXT_CHAT_SIGNATURE={inspect.signature(ProviderGoogleGenAI.text_chat)}')
+          print(f'GEMINI_ASSEMBLE_CONTEXT_SIGNATURE={inspect.signature(ProviderGoogleGenAI.assemble_context)}')
+          PY
+      - name: Start AstrBot and prove plugin loads
+        shell: bash
+        run: |
+          set -euo pipefail
+          nohup uv run --directory AstrBot astrbot run --port 6185 >runtime-evidence/startup.log 2>&1 &
+          pid=$!
+          ready=0
+          for i in $(seq 1 75); do
+            if grep -q '\[video-semantic-search\] tool not registered' runtime-evidence/startup.log; then
+              ready=1
+              break
+            fi
+            if ! kill -0 "$pid" 2>/dev/null; then
+              cat runtime-evidence/startup.log
+              exit 1
+            fi
+            sleep 1
+          done
+          cat runtime-evidence/startup.log
+          test "$ready" = '1'
+          kill "$pid" 2>/dev/null || true
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: real-astrbot-runtime-${{ matrix.astrbot_ref }}
+          path: runtime-evidence
+          if-no-files-found: error
+          retention-days: 7
