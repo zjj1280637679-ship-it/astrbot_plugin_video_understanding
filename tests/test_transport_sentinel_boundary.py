@@ -7,11 +7,52 @@ import pytest
 from astrbot.api.message_components import Video
 import astrbot_plugin_video_understanding.tool as tool_module
 from astrbot_plugin_video_understanding.tool import QueryVideoTool
+from astrbot_plugin_video_understanding.transport import (
+    build_video_transport_kwargs,
+    provider_accepts_native_video_urls,
+)
+from astrbot_plugin_video_understanding.video_binding import bind_videos_from_event
 
 
 def _context(video, host):
     event = SimpleNamespace(message_obj=SimpleNamespace(message=[video]))
     return SimpleNamespace(context=SimpleNamespace(event=event, context=host))
+
+
+class NativeProvider:
+    async def text_chat(self, prompt=None, video_urls=None, **kwargs):
+        return None
+
+
+class LegacyProvider:
+    async def text_chat(self, prompt=None, **kwargs):
+        return None
+
+
+def test_transport_negotiation_requires_explicit_provider_contract():
+    video = Video.fromURL("https://example.com/video.mp4")
+    bound = bind_videos_from_event(
+        SimpleNamespace(message_obj=SimpleNamespace(message=[video]))
+    )[0]
+
+    assert provider_accepts_native_video_urls(NativeProvider()) is True
+    assert build_video_transport_kwargs(
+        bound,
+        "/tmp/video.mp4",
+        provider=NativeProvider(),
+    ) == {"video_urls": ["/tmp/video.mp4"]}
+
+    assert provider_accepts_native_video_urls(LegacyProvider()) is False
+    legacy = build_video_transport_kwargs(
+        bound,
+        "/tmp/video.mp4",
+        provider=LegacyProvider(),
+    )
+    assert "video_urls" not in legacy
+    assert len(legacy["extra_user_content_parts"]) == 1
+
+    conservative = build_video_transport_kwargs(bound, "/tmp/video.mp4", provider=None)
+    assert "video_urls" not in conservative
 
 
 @pytest.mark.asyncio
