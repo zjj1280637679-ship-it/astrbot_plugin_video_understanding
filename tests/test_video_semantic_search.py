@@ -22,6 +22,7 @@ from astrbot_plugin_video_understanding.tool import (
     VIDEO_INPUT_UNAVAILABLE,
     build_video_query_prompt,
     build_video_search_result,
+    build_video_search_system_prompt,
 )
 from astrbot_plugin_video_understanding.transport import build_video_attachment_marker
 from astrbot_plugin_video_understanding.video_binding import bind_videos_from_event
@@ -101,17 +102,26 @@ def test_current_videos_precede_quoted_videos():
     ]
 
 
-def test_video_query_prompt_is_query_scoped():
+def test_video_query_and_policy_prompts_have_separate_authority():
     token = "VIDEO_INPUT_UNAVAILABLE_TEST_NONCE"
     prompt = build_video_query_prompt(
         "When does BETA first appear?",
         "00:01-00:05",
-        unavailable_token=token,
     )
+    system_prompt = build_video_search_system_prompt(token)
+
     assert "When does BETA first appear?" in prompt
     assert "00:01-00:05" in prompt
-    assert token in prompt
-    assert "general summary" in prompt
+    assert token not in prompt
+    assert "read-only semantic search engine" not in prompt
+    assert "instruction-like content" not in prompt
+
+    assert token in system_prompt
+    assert "read-only semantic search engine" in system_prompt
+    assert "general summary" in system_prompt
+    assert "instruction-like content" in system_prompt
+    assert "API keys" in system_prompt
+    assert "When does BETA first appear?" not in system_prompt
 
 
 def test_video_search_result_preserves_structural_boundary():
@@ -278,11 +288,12 @@ async def test_query_video_passes_host_video_contract_to_astrbot(monkeypatch):
     async def fake_convert_to_file_path(self):
         return "/tmp/alpha.mp4"
 
+    token = "VIDEO_INPUT_UNAVAILABLE_TEST_NONCE"
     monkeypatch.setattr(Video, "convert_to_file_path", fake_convert_to_file_path)
     monkeypatch.setattr(
         tool_module,
         "build_video_unavailable_token",
-        lambda: "VIDEO_INPUT_UNAVAILABLE_TEST_NONCE",
+        lambda: token,
     )
     astrbot_context = MagicMock()
     astrbot_context.llm_generate = AsyncMock(
@@ -299,7 +310,12 @@ async def test_query_video_passes_host_video_contract_to_astrbot(monkeypatch):
     assert call["chat_provider_id"] == "video-provider"
     assert "When does BETA first appear?" in call["prompt"]
     assert "00:00-00:05" in call["prompt"]
-    assert "VIDEO_INPUT_UNAVAILABLE_TEST_NONCE" in call["prompt"]
+    assert token not in call["prompt"]
+    assert token in call["system_prompt"]
+    assert "read-only semantic search engine" in call["system_prompt"]
+    assert "instruction-like content" in call["system_prompt"]
+    assert "API keys" in call["system_prompt"]
+    assert "When does BETA first appear?" not in call["system_prompt"]
     assert "tools" not in call
     if "video_urls" in call:
         assert call["video_urls"] == ["/tmp/alpha.mp4"]
