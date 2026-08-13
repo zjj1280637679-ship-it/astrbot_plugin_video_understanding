@@ -8,6 +8,7 @@ on:
       - .github/workflows/real-astrbot-runtime.yml
       - main.py
       - tool.py
+      - transport.py
       - video_binding.py
       - _conf_schema.json
       - metadata.yaml
@@ -57,12 +58,11 @@ jobs:
             --exclude 'tests' \
             --exclude 'docs' \
             ./ "$target"/
-          test -f "$target/main.py"
-          test -f "$target/tool.py"
-          test -f "$target/video_binding.py"
-          test -f "$target/metadata.yaml"
+          for file in main.py tool.py transport.py video_binding.py metadata.yaml _conf_schema.json; do
+            test -f "$target/$file"
+          done
       - name: Compile plugin
-        run: python -m compileall -q main.py tool.py video_binding.py tests
+        run: python -m compileall -q main.py tool.py transport.py video_binding.py tests
       - name: Run plugin unit tests inside AstrBot environment
         run: uv run --directory AstrBot python -m pytest "$GITHUB_WORKSPACE/tests/test_video_semantic_search.py" -q
       - name: Probe real host interfaces
@@ -95,7 +95,7 @@ jobs:
           pid=$!
           ready=0
           for i in $(seq 1 75); do
-            if grep -q '\[video-semantic-search\] tool not registered' runtime-evidence/startup.log; then
+            if grep -Eq '\[video-semantic-search\] (tool unavailable|query_video prepared)' runtime-evidence/startup.log; then
               ready=1
               break
             fi
