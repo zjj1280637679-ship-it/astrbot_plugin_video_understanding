@@ -18,7 +18,7 @@ class VideoSemanticSearchPlugin(Star):
         self.video_search_provider_id = str(
             self.config.get("video_search_provider_id") or ""
         ).strip()
-
+        self.query_video_tool = None
         if self.enabled and self.video_search_provider_id:
             self.query_video_tool = QueryVideoTool(
                 provider_id=self.video_search_provider_id,
@@ -29,7 +29,6 @@ class VideoSemanticSearchPlugin(Star):
                 VERSION,
             )
         else:
-            self.query_video_tool = None
             logger.info(
                 "[video-semantic-search] tool unavailable; enabled=%s provider_configured=%s",
                 self.enabled,
@@ -42,10 +41,17 @@ class VideoSemanticSearchPlugin(Star):
         event: AstrMessageEvent,
         req: ProviderRequest,
     ) -> None:
-        if self.query_video_tool is None:
-            return
-        if not bind_videos_from_event(event):
+        tool = self.query_video_tool
+        if tool is None or not bind_videos_from_event(event):
             return
         if req.func_tool is None:
             req.func_tool = ToolSet()
-        req.func_tool.add_tool(self.query_video_tool)
+        existing = req.func_tool.get_tool(tool.name)
+        if existing is tool:
+            return
+        if existing is not None:
+            logger.warning(
+                "[video-semantic-search] query_video name collision; existing tool kept"
+            )
+            return
+        req.func_tool.add_tool(tool)
