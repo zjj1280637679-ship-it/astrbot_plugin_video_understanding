@@ -1,12 +1,20 @@
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
+import sys
 
 import pytest
 
-from astrbot.api.message_components import Video
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT.parent))
 
-from ..tool import QueryVideoTool, VIDEO_INPUT_UNAVAILABLE, build_video_query_prompt
-from ..video_binding import bind_videos_from_event
+from astrbot.api.message_components import Video
+from astrbot_plugin_video_understanding.tool import (
+    QueryVideoTool,
+    VIDEO_INPUT_UNAVAILABLE,
+    build_video_query_prompt,
+)
+from astrbot_plugin_video_understanding.video_binding import bind_videos_from_event
 
 
 def _event_with(*components):
