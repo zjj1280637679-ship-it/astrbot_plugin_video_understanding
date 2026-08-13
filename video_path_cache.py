@@ -7,6 +7,8 @@ from astrbot.api.event import AstrMessageEvent
 from .video_binding import BoundVideo
 
 _CACHE_KEY = "video_semantic_search_resolved_paths"
+_QUERY_HISTORY_KEY = "video_semantic_search_query_history"
+_QUERY_HISTORY_FALLBACK_ATTR = "_video_semantic_search_query_history"
 
 
 def _video_ref(bound: BoundVideo) -> str:
@@ -37,6 +39,54 @@ def _cache(event: AstrMessageEvent) -> dict[str, str] | None:
     except Exception:
         return None
     return value
+
+
+def _query_history_store(event: object) -> dict:
+    getter = getattr(event, "get_extra", None)
+    setter = getattr(event, "set_extra", None)
+    if callable(getter) and callable(setter):
+        try:
+            value = getter(_QUERY_HISTORY_KEY)
+            if isinstance(value, dict):
+                return value
+            value = {}
+            setter(_QUERY_HISTORY_KEY, value)
+            return value
+        except Exception:
+            pass
+
+    value = getattr(event, _QUERY_HISTORY_FALLBACK_ATTR, None)
+    if isinstance(value, dict):
+        return value
+    value = {}
+    try:
+        setattr(event, _QUERY_HISTORY_FALLBACK_ATTR, value)
+    except Exception:
+        return {}
+    return value
+
+
+def get_video_query_contexts(event: object, provider_id: str, video_index: int) -> list[dict]:
+    key = (str(provider_id), int(video_index))
+    history = _query_history_store(event).get(key, [])
+    return [dict(item) for item in history if isinstance(item, dict)]
+
+
+def append_video_query_turn(
+    event: object,
+    provider_id: str,
+    video_index: int,
+    user_prompt: str,
+    assistant_answer: str,
+) -> None:
+    key = (str(provider_id), int(video_index))
+    history = _query_history_store(event).setdefault(key, [])
+    history.extend(
+        [
+            {"role": "user", "content": str(user_prompt)},
+            {"role": "assistant", "content": str(assistant_answer)},
+        ]
+    )
 
 
 def _key(bound: BoundVideo) -> str:
