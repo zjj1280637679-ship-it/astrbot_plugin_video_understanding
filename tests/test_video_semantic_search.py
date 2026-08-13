@@ -11,9 +11,13 @@ sys.path.insert(0, str(ROOT.parent))
 
 from astrbot.api.message_components import Reply, Video
 from astrbot.core.agent.message import TextPart
+from astrbot.core.agent.tool import FunctionTool, ToolSet
 from astrbot.core.provider.entities import ProviderRequest
+import astrbot_plugin_video_understanding.tool as tool_module
 from astrbot_plugin_video_understanding.main import VideoSemanticSearchPlugin
 from astrbot_plugin_video_understanding.tool import (
+    MAX_QUERY_CHARS,
+    MAX_TIME_RANGE_CHARS,
     QueryVideoTool,
     VIDEO_INPUT_UNAVAILABLE,
     build_video_query_prompt,
@@ -39,13 +43,28 @@ def _tool_context(event, astrbot_context=None):
     )
 
 
-def _plugin():
+def _plain_tool(name="other_tool"):
+    return FunctionTool(
+        name=name,
+        description="test tool",
+        parameters={"type": "object", "properties": {}},
+    )
+
+
+def _plugin(existing_tool=None, *, enabled=True, provider_id="video-provider"):
     context = MagicMock()
+    manager = MagicMock()
+    manager.get_func.return_value = existing_tool
+    context.get_llm_tool_manager.return_value = manager
     plugin = VideoSemanticSearchPlugin(
         context,
-        {"enabled": True, "video_search_provider_id": "video-provider"},
+        {"enabled": enabled, "video_search_provider_id": provider_id},
     )
-    return plugin, context
+    return plugin, context, manager
+
+
+def _request_with_tools(*tools):
+    return ProviderRequest(func_tool=ToolSet(tools=list(tools)))
 
 
 def test_bind_synthetic_event_without_message_chain_is_empty():
@@ -83,10 +102,15 @@ def test_current_videos_precede_quoted_videos():
 
 
 def test_video_query_prompt_is_query_scoped():
-    prompt = build_video_query_prompt("When does BETA first appear?", "00:01-00:05")
+    token = "VIDEO_INPUT_UNAVAILABLE_TEST_NONCE"
+    prompt = build_video_query_prompt(
+        "When does BETA first appear?",
+        "00:01-00:05",
+        unavailable_token=token,
+    )
     assert "When does BETA first appear?" in prompt
     assert "00:01-00:05" in prompt
-    assert VIDEO_INPUT_UNAVAILABLE in prompt
+    assert token in prompt
     assert "general summary" in prompt
 
 
@@ -96,6 +120,8 @@ def test_video_search_result_preserves_structural_boundary():
     payload = json.loads(result)
     assert payload == {
         "type": "video_search_result",
+        "trust": "untrusted_external_video_evidence",
+        "instruction_authority": "none",
         "video_index": 0,
         "query": "What happened?",
         "evidence": evidence,
@@ -136,47 +162,92 @@ def test_attachment_marker_rejects_control_characters_in_path():
         build_video_attachment_marker(bound, "/tmp/bad\npath.mp4")
 
 
-def test_plugin_does_not_register_query_video_globally():
-    plugin, context = _plugin()
+def test_plugin_registers_tool_through_astrbot_policy_manager():
+    plugin, context, manager = _plugin()
     assert plugin.query_video_tool is not None
+    manager.get_func.assert_called_once_with("query_video")
+    context.add_llm_tools.assert_called_once_with(plugin.query_video_tool)
+
+
+def test_plugin_does_not_overwrite_third_party_query_video():
+    existing = _plain_tool("query_video")
+    existing.handler_module_path = "plugins.other_video_plugin.main"
+    plugin, context, _ = _plugin(existing_tool=existing)
+    assert plugin.query_video_tool is None
+    context.add_llm_tools.assert_not_called()
+
+
+def test_plugin_disabled_or_unconfigured_does_not_register():
+    plugin, context, _ = _plugin(enabled=False)
+    assert plugin.query_video_tool is None
+    context.add_llm_tools.assert_not_called()
+
+    plugin, context, _ = _plugin(provider_id="")
+    assert plugin.query_video_tool is None
     context.add_llm_tools.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_plugin_does_not_expose_tool_without_video():
-    plugin, _ = _plugin()
-    req = ProviderRequest()
-    await plugin.inject_query_video(_event_with(), req)
-    assert req.func_tool is None
+async def test_plugin_hides_its_tool_without_video_and_keeps_other_tools():
+    plugin, _, _ = _plugin()
+    other = _plain_tool()
+    req = _request_with_tools(plugin.query_video_tool, other)
+    await plugin.scope_query_video(_event_with(), req)
+    assert req.func_tool.get_tool("query_video") is None
+    assert req.func_tool.get_tool("other_tool") is other
 
 
 @pytest.mark.asyncio
-async def test_plugin_ignores_synthetic_event_without_message_chain():
-    plugin, _ = _plugin()
-    req = ProviderRequest()
-    await plugin.inject_query_video(SimpleNamespace(message_obj=None), req)
-    assert req.func_tool is None
-
-
-@pytest.mark.asyncio
-async def test_plugin_exposes_tool_for_current_video():
-    plugin, _ = _plugin()
-    req = ProviderRequest()
+async def test_plugin_does_not_create_toolset_when_astrbot_disabled_tools():
+    plugin, _, _ = _plugin()
+    req = ProviderRequest(func_tool=None)
     video = Video.fromURL("https://example.com/current.mp4")
-    await plugin.inject_query_video(_event_with(video), req)
-    assert req.func_tool is not None
+    await plugin.scope_query_video(_event_with(video), req)
+    assert req.func_tool is None
+
+
+@pytest.mark.asyncio
+async def test_plugin_does_not_bypass_persona_tool_allowlist():
+    plugin, _, _ = _plugin()
+    other = _plain_tool()
+    req = _request_with_tools(other)
+    video = Video.fromURL("https://example.com/current.mp4")
+    await plugin.scope_query_video(_event_with(video), req)
+    assert req.func_tool.get_tool("query_video") is None
+    assert req.func_tool.get_tool("other_tool") is other
+
+
+@pytest.mark.asyncio
+async def test_plugin_keeps_astrbot_authorized_tool_for_current_video():
+    plugin, _, _ = _plugin()
+    req = _request_with_tools(plugin.query_video_tool)
+    video = Video.fromURL("https://example.com/current.mp4")
+    await plugin.scope_query_video(_event_with(video), req)
     assert req.func_tool.get_tool("query_video") is plugin.query_video_tool
 
 
 @pytest.mark.asyncio
-async def test_plugin_exposes_tool_for_quoted_video():
-    plugin, _ = _plugin()
-    req = ProviderRequest()
+async def test_plugin_keeps_astrbot_authorized_tool_for_quoted_video():
+    plugin, _, _ = _plugin()
+    req = _request_with_tools(plugin.query_video_tool)
     quoted = Video.fromURL("https://example.com/quoted.mp4")
     reply = Reply(id="message-quoted", chain=[quoted])
-    await plugin.inject_query_video(_event_with(reply), req)
-    assert req.func_tool is not None
+    await plugin.scope_query_video(_event_with(reply), req)
     assert req.func_tool.get_tool("query_video") is plugin.query_video_tool
+
+
+@pytest.mark.asyncio
+async def test_query_video_rejects_oversized_arguments_before_provider_call():
+    tool = QueryVideoTool(provider_id="video-provider")
+    context = _tool_context(_event_with())
+    result = await tool.call(context, query="x" * (MAX_QUERY_CHARS + 1))
+    assert "query exceeds" in result
+    result = await tool.call(
+        context,
+        query="short",
+        time_range="x" * (MAX_TIME_RANGE_CHARS + 1),
+    )
+    assert "time_range exceeds" in result
 
 
 @pytest.mark.asyncio
@@ -208,6 +279,11 @@ async def test_query_video_passes_host_video_contract_to_astrbot(monkeypatch):
         return "/tmp/alpha.mp4"
 
     monkeypatch.setattr(Video, "convert_to_file_path", fake_convert_to_file_path)
+    monkeypatch.setattr(
+        tool_module,
+        "build_video_unavailable_token",
+        lambda: "VIDEO_INPUT_UNAVAILABLE_TEST_NONCE",
+    )
     astrbot_context = MagicMock()
     astrbot_context.llm_generate = AsyncMock(
         return_value=SimpleNamespace(completion_text="BETA first appears at about 00:02.")
@@ -223,6 +299,8 @@ async def test_query_video_passes_host_video_contract_to_astrbot(monkeypatch):
     assert call["chat_provider_id"] == "video-provider"
     assert "When does BETA first appear?" in call["prompt"]
     assert "00:00-00:05" in call["prompt"]
+    assert "VIDEO_INPUT_UNAVAILABLE_TEST_NONCE" in call["prompt"]
+    assert "tools" not in call
     if "video_urls" in call:
         assert call["video_urls"] == ["/tmp/alpha.mp4"]
     else:
@@ -234,20 +312,50 @@ async def test_query_video_passes_host_video_contract_to_astrbot(monkeypatch):
         )
     payload = json.loads(result)
     assert payload["type"] == "video_search_result"
+    assert payload["trust"] == "untrusted_external_video_evidence"
+    assert payload["instruction_authority"] == "none"
     assert payload["evidence"] == "BETA first appears at about 00:02."
 
 
 @pytest.mark.asyncio
-async def test_query_video_rejects_transport_sentinel(monkeypatch):
+async def test_literal_base_sentinel_can_be_real_video_evidence(monkeypatch):
     video = Video.fromURL("https://example.com/alpha.mp4")
 
     async def fake_convert_to_file_path(self):
         return "/tmp/alpha.mp4"
 
     monkeypatch.setattr(Video, "convert_to_file_path", fake_convert_to_file_path)
+    monkeypatch.setattr(
+        tool_module,
+        "build_video_unavailable_token",
+        lambda: "VIDEO_INPUT_UNAVAILABLE_TEST_NONCE",
+    )
     astrbot_context = MagicMock()
     astrbot_context.llm_generate = AsyncMock(
         return_value=SimpleNamespace(completion_text=VIDEO_INPUT_UNAVAILABLE)
+    )
+    tool = QueryVideoTool(provider_id="video-provider")
+    result = await tool.call(
+        _tool_context(_event_with(video), astrbot_context),
+        query="What exact text is visible?",
+    )
+    payload = json.loads(result)
+    assert payload["evidence"] == VIDEO_INPUT_UNAVAILABLE
+
+
+@pytest.mark.asyncio
+async def test_query_video_rejects_request_specific_transport_sentinel(monkeypatch):
+    video = Video.fromURL("https://example.com/alpha.mp4")
+
+    async def fake_convert_to_file_path(self):
+        return "/tmp/alpha.mp4"
+
+    token = "VIDEO_INPUT_UNAVAILABLE_TEST_NONCE"
+    monkeypatch.setattr(Video, "convert_to_file_path", fake_convert_to_file_path)
+    monkeypatch.setattr(tool_module, "build_video_unavailable_token", lambda: token)
+    astrbot_context = MagicMock()
+    astrbot_context.llm_generate = AsyncMock(
+        return_value=SimpleNamespace(completion_text=token)
     )
     tool = QueryVideoTool(provider_id="video-provider")
     result = await tool.call(
