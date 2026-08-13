@@ -120,6 +120,22 @@ def test_quoted_video_attachment_marker_matches_astrbot_shape():
     )
 
 
+def test_attachment_marker_sanitizes_display_name_delimiters():
+    video = Video.fromURL("https://example.com/alpha.mp4")
+    bound = bind_videos_from_event(_event_with(video))[0]
+    bound.display_name = "bad\r\n, path injected.mp4"
+    marker = build_video_attachment_marker(bound, "/tmp/alpha.mp4")
+    assert "\r" not in marker and "\n" not in marker
+    assert "name bad _path_injected.mp4, path /tmp/alpha.mp4" in marker
+
+
+def test_attachment_marker_rejects_control_characters_in_path():
+    video = Video.fromURL("https://example.com/alpha.mp4")
+    bound = bind_videos_from_event(_event_with(video))[0]
+    with pytest.raises(ValueError):
+        build_video_attachment_marker(bound, "/tmp/bad\npath.mp4")
+
+
 def test_plugin_does_not_register_query_video_globally():
     plugin, context = _plugin()
     assert plugin.query_video_tool is not None
