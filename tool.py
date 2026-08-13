@@ -48,6 +48,18 @@ def build_video_search_result(index: int, query: str, evidence: str) -> str:
     )
 
 
+def parse_video_index(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip()
+        if normalized.isdecimal():
+            return int(normalized)
+    return None
+
+
 @dataclass
 class QueryVideoTool(FunctionTool[AstrAgentContext]):
     name: str = "query_video"
@@ -68,13 +80,19 @@ class QueryVideoTool(FunctionTool[AstrAgentContext]):
                 },
                 "video_index": {
                     "type": "integer",
-                    "description": "Video index in the current request. Defaults to 0.",
+                    "description": (
+                        "Video index. Current-message videos are numbered first in "
+                        "appearance order, followed by quoted-message videos. Defaults to 0."
+                    ),
                     "default": 0,
                     "minimum": 0,
                 },
                 "time_range": {
                     "type": "string",
-                    "description": "Optional focus range such as 00:12-00:25.",
+                    "description": (
+                        "Optional attention hint such as 00:12-00:25. This does not crop "
+                        "or shorten the video sent through the Provider."
+                    ),
                     "default": "",
                 },
             },
@@ -93,10 +111,9 @@ class QueryVideoTool(FunctionTool[AstrAgentContext]):
         if not query:
             return "VIDEO_QUERY_ERROR: query is empty"
 
-        try:
-            index = int(kwargs.get("video_index", 0))
-        except (TypeError, ValueError):
-            return "VIDEO_QUERY_ERROR: video_index must be an integer"
+        index = parse_video_index(kwargs.get("video_index", 0))
+        if index is None:
+            return "VIDEO_QUERY_ERROR: video_index must be a non-negative integer"
         if index < 0:
             return "VIDEO_QUERY_ERROR: video_index must be non-negative"
 
