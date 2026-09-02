@@ -1,15 +1,69 @@
 {
   "enabled": {
-    "description": "启用视频语义搜索工具",
+    "description": "启用请求态多模态转述桥",
     "type": "bool",
     "default": true,
-    "hint": "开启后，仅在当前或引用消息中存在视频时向本轮主模型请求挂载 query_video；工具只在主模型主动调用时才读取视频。"
+    "hint": "只处理已经进入当前 AstrBot Agent Request 的图片、语音和视频；不接管群聊环境全量转述。"
   },
-  "video_search_provider_id": {
-    "description": "视频搜索模型",
+  "relay_mode": {
+    "description": "转述模式",
+    "type": "string",
+    "default": "adaptive",
+    "options": ["adaptive", "always"],
+    "labels": ["自适应转述", "强制转述"],
+    "hint": "自适应：仅当前主模型卡没有启用对应原生模态路径时首报；强制：存在媒体就首报。"
+  },
+  "unknown_native_route": {
+    "description": "原生模态状态未知时",
+    "type": "string",
+    "default": "relay",
+    "options": ["relay", "native"],
+    "labels": ["保守转述", "尝试原生"],
+    "hint": "模型卡没有明确 modalities 时，不把未知误写成模型能力事实；默认保守转述。"
+  },
+  "enable_query_tools": {
+    "description": "启用主动模态问答工具",
+    "type": "bool",
+    "default": true,
+    "hint": "向主模型提供 query_image / query_audio / query_video；工具仅在当前或引用消息存在对应媒体时暴露。"
+  },
+  "image_relay_provider_id": {
+    "description": "图片转述 / 问答模型",
     "type": "string",
     "default": "",
     "_special": "select_provider",
-    "hint": "选择 AstrBot 中已经配置好的、具有视频读取能力的模型卡。本插件不管理 API Key、Base URL 或供应商请求体。"
+    "hint": "选择 AstrBot 中已配置且能读取图片的模型卡。"
+  },
+  "audio_relay_provider_id": {
+    "description": "音频转述 / 问答模型",
+    "type": "string",
+    "default": "",
+    "_special": "select_provider",
+    "hint": "选择 AstrBot 中已配置且能读取音频的模型卡。使用本插件处理请求音频时建议关闭 AstrBot 原生预处理 STT。"
+  },
+  "video_relay_provider_id": {
+    "description": "视频转述 / 问答模型",
+    "type": "string",
+    "default": "",
+    "_special": "select_provider",
+    "hint": "选择 AstrBot 中已配置且能读取视频的模型卡；兼容旧 video_search_provider_id 配置。"
+  },
+  "image_bootstrap_prompt": {
+    "description": "图片首报提示词（可选）",
+    "type": "string",
+    "default": "",
+    "hint": "留空使用插件通用首报提示词。"
+  },
+  "audio_bootstrap_prompt": {
+    "description": "音频首报提示词（可选）",
+    "type": "string",
+    "default": "",
+    "hint": "留空使用插件通用首报提示词。"
+  },
+  "video_bootstrap_prompt": {
+    "description": "视频首报提示词（可选）",
+    "type": "string",
+    "default": "",
+    "hint": "留空使用插件通用首报提示词。"
   }
 }

@@ -1,8 +1,8 @@
 name: astrbot_plugin_video_understanding
-display_name: "视频语义搜索器"
-desc: "把当前或引用消息中的视频作为可反复查询的信息空间，让主模型通过 query_video 按需向已有视频能力模型卡提出子问题，并在 AstrBot 原有 Tool Loop 中逐步取得视频证据。"
-short_desc: "让主模型像搜索网页一样反复查询视频内容。"
-version: "0.1.0"
+display_name: "多模态转述桥"
+desc: "AstrBot 请求态多模态转述桥：支持强制/自适应首报，并通过 query_image、query_audio、query_video 让主模型按信息残差重新查询原始媒体。"
+short_desc: "缺模态时自动转述，信息不足时再主动追问原始媒体。"
+version: "0.2.0"
 astrbot_version: ">=4.27.3"
 author: "羊膜大人"
 repo: "https://github.com/zjj1280637679-ship-it/astrbot_plugin_video_understanding"

@@ -1,0 +1,115 @@
+name: Modality Relay Runtime Matrix
+
+on:
+  push:
+    branches:
+      - feat/modality-relay-v0.2
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  runtime:
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - astrbot_ref: v4.27.4
+            experimental: false
+          - astrbot_ref: v4.28.0-beta.1
+            experimental: false
+          - astrbot_ref: master
+            experimental: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 22
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Prepare evidence directory
+        run: mkdir -p runtime-evidence
+      - name: Clone AstrBot
+        run: git clone --depth 1 --branch '${{ matrix.astrbot_ref }}' https://github.com/AstrBotDevs/AstrBot.git AstrBot
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
+        with:
+          enable-cache: false
+      - name: Install exact AstrBot runtime
+        run: uv sync --directory AstrBot
+      - name: Initialize clean AstrBot
+        shell: bash
+        run: |
+          set -euo pipefail
+          touch AstrBot/.astrbot
+          printf '\n' | uv run --directory AstrBot astrbot init
+      - name: Install Relay plugin into AstrBot
+        shell: bash
+        run: |
+          set -euo pipefail
+          target='AstrBot/data/plugins/astrbot_plugin_video_understanding'
+          rm -rf "$target"
+          mkdir -p "$target"
+          rsync -a --exclude '.git' --exclude '.github' --exclude 'AstrBot' --exclude 'tests' ./ "$target"/
+          test -s "$target/main.py"
+          test -s "$target/media_tools.py"
+          test -s "$target/skills/modality-residual-query/SKILL.md"
+      - name: Compile plugin and tests
+        run: python -m compileall -q main.py tool.py transport.py video_binding.py video_path_cache.py policy.py media_binding.py media_state.py media_tools.py relay.py tests
+      - name: Run plugin tests inside AstrBot environment
+        shell: bash
+        env:
+          PYTHONPATH: ${{ github.workspace }}/..
+        run: |
+          set -euo pipefail
+          uv run --directory AstrBot python -m pytest "$GITHUB_WORKSPACE/tests" -q | tee runtime-evidence/plugin-tests.txt
+      - name: Prove AstrBot skills-like context regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --directory AstrBot python -m pytest tests/test_tool_loop_agent_runner.py -q -k 'skills_like_requery_passes_extra_user_content_parts' | tee runtime-evidence/skills-like-regression.txt
+      - name: Probe host contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          ASTRBOT_REF='${{ matrix.astrbot_ref }}' uv run --directory AstrBot python - <<'PY' | tee runtime-evidence/host-contract.txt
+          import dataclasses
+          import inspect
+          import os
+          from astrbot.core.agent.tool import ToolSet
+          from astrbot.core.provider.entities import ProviderRequest
+          from astrbot.core.star.context import Context
+          fields = {field.name for field in dataclasses.fields(ProviderRequest)}
+          print(f"ASTRBOT_REF={os.environ['ASTRBOT_REF']}")
+          print(f"REQUEST_IMAGE_URLS={'image_urls' in fields}")
+          print(f"REQUEST_AUDIO_URLS={'audio_urls' in fields}")
+          print(f"REQUEST_EXTRA_PARTS={'extra_user_content_parts' in fields}")
+          print(f"TOOL_LIGHT_SET={hasattr(ToolSet, 'get_light_tool_set')}")
+          print(f"TOOL_PARAM_ONLY_SET={hasattr(ToolSet, 'get_param_only_tool_set')}")
+          print(f"CONTEXT_LLM_GENERATE={inspect.signature(Context.llm_generate)}")
+          PY
+      - name: Start AstrBot and prove plugin loads
+        shell: bash
+        run: |
+          set -euo pipefail
+          nohup uv run --directory AstrBot astrbot run --port 6185 >runtime-evidence/startup.log 2>&1 &
+          pid=$!
+          ready=0
+          for i in $(seq 1 75); do
+            if grep -q '\[modality-relay\] loaded' runtime-evidence/startup.log; then ready=1; break; fi
+            if ! kill -0 "$pid" 2>/dev/null; then cat runtime-evidence/startup.log; exit 1; fi
+            sleep 1
+          done
+          cat runtime-evidence/startup.log
+          test "$ready" = '1'
+          kill "$pid" 2>/dev/null || true
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: modality-relay-runtime-${{ matrix.astrbot_ref }}
+          path: runtime-evidence
+          if-no-files-found: error
+          retention-days: 7
