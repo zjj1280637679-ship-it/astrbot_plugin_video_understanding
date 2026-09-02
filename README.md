@@ -1,85 +1,112 @@
-# astrbot_plugin_video_understanding
+# AstrBot 多模态转述桥
 
-AstrBot 对话式视频搜索插件。
+> v0.2 development branch: `feat/modality-relay-v0.2`
 
-`query_video` 不是自动视频摘要器，也不增强视频模型的智能。它只把当前/引用视频与主模型整理出的自然语言问题交给管理员选择的已有视频能力模型卡，再把答案返回主模型。
+这个仓库从原来的 `query_video` 视频语义搜索器扩展为 **AstrBot 请求态多模态转述桥**。它不接管群聊环境中的全量媒体归档，只处理已经进入当前 Agent Request 的图片、语音、视频。
 
-```text
-用户问题 + 视频
-→ 主模型整理查询
-→ query_video
-→ 视频模型回答
-→ 主模型判断是否还要问
-→ 必要时继续 query_video
-→ 视频模型保留此前同视频 Q/A
-→ 主模型最终回答
-```
+## 核心行为
 
-视频理解深度由“用户问题所需深度 × 视频模型自身能力”决定。插件不规定只能直接观察、不能做因果分析、必须窄查询或固定分析步骤。
+### 两档首报策略
 
-## 连续查询
+- `adaptive`：仅当当前实际主模型卡没有启用对应 `modalities` 原生输入路径时，调用专用转述模型生成第一次通用首报。
+- `always`：当前请求存在该媒体时始终生成首报。
 
-同一次 AstrBot event / Agent run 中，同一 `provider_id + video_index` 的成功 Q/A 会原样作为后续视频模型调用的 `contexts`：
+能力未知保持三态：`enabled / disabled / unknown`。`unknown` 默认保守走转述，但不会被写成永久“模型不支持”事实。
 
-```text
-Q1 → A1
-Q2 + Q1/A1 → A2
-Q3 + Q1/A1/Q2/A2 → A3
-```
+### 三个主动查询工具
 
-历史不摘要、不改写；不同视频/Provider 隔离；event 结束自然失效；失败调用不进入历史。插件不建立永久视频数据库。
+- `query_image`
+- `query_audio`
+- `query_video`
 
-因此可以自然追问：
+第一次首报只是通用观察。主模型通过内置 Skill 判断：
 
 ```text
-Q1: 哪个大字包含字母 M？
-A1: GAMMA
-Q2: 它之前是什么？
-A2: BETA
+回答当前问题所需的证据
+-
+已有首报与查询结果已经覆盖的证据
+=
+仍需补充的信息残差
 ```
 
-第二问不需要重新把 `GAMMA` 写进 prompt。
+只有残差可能改变最终答案时才调用对应 `query_*`，重新读取原始媒体。
 
-## 工具参数
+例如：
 
 ```text
-query       必填：交给视频模型的问题或提示词
-video_index 可选：视频编号，默认 0
-time_range  可选：时间范围注意力提示
+用户：这只手有几根手指？
+首报：图片中是一只张开的手。
+残差：手指数未知。
+query_image：仔细检查这只手，准确统计所有可见手指。
 ```
 
-`time_range` 不会裁剪视频，也不保证降低 Provider 成本。
+## 与 AstrBot 的边界
 
-当前消息视频先编号，然后加入 `Reply.chain` 中的引用视频。无视频、索引越界、视频解析失败或 Provider 调用失败都会明确失败。
+AstrBot 继续拥有 Event / Message Chain、Provider / ProviderRequest、媒体基础设施、Tool Manager / Tool Loop、Full / Skills-like 两段式工具调度，以及主模型和 fallback 路由。
 
-## 职责边界
+本插件只拥有 Request 媒体绑定、`always / adaptive` Relay Gate、通用首报、当前 Agent Run 内查询历史、`query_image / query_audio / query_video` 和 Residual Query Skill。
 
-`query_video` 服从 AstrBot Tool Manager、工具启停和人格白名单。插件只消费 AstrBot / Provider 已有的视频传输能力，不增加：
+原则：**深度依赖 AstrBot 的抽象，浅度依赖 AstrBot 的内部实现。**
 
-- 供应商专属 SDK 或品牌路由；
-- 视频能力重复探测；
-- 自建上传器；
-- OCR / STT / 抽帧 / FFmpeg 业务降级；
-- 自动摘要或自动问题分解；
-- 独立 Agent Loop；
-- 永久视频资产库。
+## 与 AstrBot 原生图片转述 / STT 的关系
 
-## 当前验证
-
-当前业务 runtime：
+如果本插件负责当前请求图片，建议留空：
 
 ```text
-d5f4742e114771669a7e969a8eb6e62d3bffa883
+provider_settings.default_image_caption_provider_id
 ```
 
-真实火山方舟 + AstrBot ToolLoop 验证已经证明：视频模型第一次回答 `GAMMA` 后，主模型第二次只用“that word / 它”进行追问；第二次视频模型调用实际收到此前 `user + assistant(GAMMA)` contexts，返回 `BETA`，最终主模型回答：
+如果本插件负责当前请求音频，建议关闭：
 
 ```text
-REFERENT=GAMMA; BEFORE=BETA
+provider_stt_settings.enable
 ```
 
-当前权威验证基线：`docs/FINAL_VALIDATION_BASELINE_2026-08-14.md`。
+AstrBot 预处理 STT 会把 `Record` 替换为 `Plain`，使后续 `query_audio` 无法重新访问原始语音。
 
-## 配置
+`provider_ltm_settings.image_caption` 属于群聊环境历史文本化，不属于本插件职责，可以独立保留。
 
-只需在 AstrBot 中选择已经配置好的视频能力模型卡。插件不保存 API Key、Base URL，也不维护自己的 Provider 数据库。
+## 火山方舟双通道
+
+`astrbot_plugin_volcengine_provider` 是受支持的集成对象，但不是本插件运行依赖。
+
+本插件不 import 火山插件、不根据 Provider 品牌或 model ID 猜能力、不复制 Ark 音频/视频传输，只读取 AstrBot 模型卡的 canonical `modalities` 和公共 Provider/媒体契约。
+
+因此火山模型卡开启 `audio` / `video` 时，`adaptive` 会自然保留原生路径；关闭时才进入 Relay。
+
+## Skills-like 两段式工具调用
+
+插件不自行实现两段式 Tool Loop。
+
+在 AstrBot `skills-like` 模式下：
+
+1. 第一阶段只依赖工具名称和 Description，决定是否选择 `query_image / query_audio / query_video`；
+2. 第二阶段由 AstrBot 下发所选工具参数 Schema，主模型把残差编译为具体 `query`；
+3. 第一次 `<modality_relay>` 通过 `extra_user_content_parts` 注入并应在 re-query 中保留。
+
+工具参数保持最小：
+
+```text
+query_image(query, image_index=0)
+query_audio(query, audio_index=0, time_range="")
+query_video(query, video_index=0, time_range="")
+```
+
+## GitHub 验证
+
+仓库内 CI 使用真实 AstrBot Runtime，而不是只做 Mock：
+
+- AstrBot `v4.27.4`
+- AstrBot `v4.28.0-beta.1`
+- AstrBot `master`（前瞻预警）
+- Full / Skills-like Tool Schema 合同
+- 未安装火山插件
+- 安装火山双通道 `main`
+
+`master` 是兼容雷达，不是发布地基。
+
+详见：
+
+- `docs/ARCHITECTURE_V0.2.md`
+- `docs/VERIFICATION_ENVIRONMENT.md`
+- `skills/modality-residual-query/SKILL.md`
