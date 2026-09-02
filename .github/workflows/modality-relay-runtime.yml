@@ -60,11 +60,17 @@ jobs:
       - name: Compile plugin and tests
         run: python -m compileall -q main.py tool.py transport.py video_binding.py video_path_cache.py policy.py media_binding.py media_state.py media_tools.py relay.py tests
       - name: Run plugin tests inside AstrBot environment
+        shell: bash
         env:
           PYTHONPATH: ${{ github.workspace }}/..
-        run: uv run --directory AstrBot python -m pytest "$GITHUB_WORKSPACE/tests" -q | tee runtime-evidence/plugin-tests.txt
+        run: |
+          set -euo pipefail
+          uv run --directory AstrBot python -m pytest "$GITHUB_WORKSPACE/tests" -q | tee runtime-evidence/plugin-tests.txt
       - name: Prove AstrBot skills-like context regression
-        run: uv run --directory AstrBot python -m pytest tests/test_tool_loop_agent_runner.py -q -k 'skills_like_requery_passes_extra_user_content_parts' | tee runtime-evidence/skills-like-regression.txt
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --directory AstrBot python -m pytest tests/test_tool_loop_agent_runner.py -q -k 'skills_like_requery_passes_extra_user_content_parts' | tee runtime-evidence/skills-like-regression.txt
       - name: Probe host contracts
         shell: bash
         run: |
