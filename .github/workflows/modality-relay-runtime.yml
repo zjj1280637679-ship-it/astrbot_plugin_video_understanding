@@ -28,6 +28,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Prepare evidence directory
+        run: mkdir -p runtime-evidence
       - name: Clone AstrBot
         run: git clone --depth 1 --branch '${{ matrix.astrbot_ref }}' https://github.com/AstrBotDevs/AstrBot.git AstrBot
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
@@ -60,14 +62,13 @@ jobs:
       - name: Run plugin tests inside AstrBot environment
         env:
           PYTHONPATH: ${{ github.workspace }}/..
-        run: uv run --directory AstrBot python -m pytest "$GITHUB_WORKSPACE/tests" -q
+        run: uv run --directory AstrBot python -m pytest "$GITHUB_WORKSPACE/tests" -q | tee runtime-evidence/plugin-tests.txt
       - name: Prove AstrBot skills-like context regression
-        run: uv run --directory AstrBot python -m pytest tests/test_tool_loop_agent_runner.py -q -k 'skills_like_requery_passes_extra_user_content_parts'
+        run: uv run --directory AstrBot python -m pytest tests/test_tool_loop_agent_runner.py -q -k 'skills_like_requery_passes_extra_user_content_parts' | tee runtime-evidence/skills-like-regression.txt
       - name: Probe host contracts
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p runtime-evidence
           ASTRBOT_REF='${{ matrix.astrbot_ref }}' uv run --directory AstrBot python - <<'PY' | tee runtime-evidence/host-contract.txt
           import dataclasses
           import inspect
