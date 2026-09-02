@@ -1,0 +1,63 @@
+name: Modality Relay v0.2 Release Gate
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/modality-relay-v0.2
+
+permissions:
+  contents: read
+
+jobs:
+  architecture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Compile runtime
+        run: python -m compileall -q main.py tool.py transport.py video_binding.py video_path_cache.py policy.py media_binding.py media_state.py media_tools.py relay.py tests
+      - name: Reject ownership creep
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime=(main.py policy.py media_binding.py media_state.py media_tools.py relay.py tool.py transport.py)
+          if grep -Ein 'google\.generativeai|from google import genai|opencv|pytesseract|whisper' "${runtime[@]}"; then
+            echo 'Provider or fallback ownership creep detected.'
+            exit 1
+          fi
+          if grep -Ein 'import[[:space:]].*astrbot_plugin_volcengine_provider|from[[:space:]].*astrbot_plugin_volcengine_provider' "${runtime[@]}"; then
+            echo 'Hard Volcengine plugin dependency detected.'
+            exit 1
+          fi
+      - name: Verify release files
+        shell: bash
+        run: |
+          set -euo pipefail
+          for file in README.md metadata.yaml _conf_schema.json main.py policy.py media_binding.py media_state.py media_tools.py relay.py skills/modality-residual-query/SKILL.md docs/ARCHITECTURE_V0.2.md docs/VERIFICATION_ENVIRONMENT.md; do
+            test -s "$file"
+          done
+
+  stable-hosts:
+    needs: architecture
+    strategy:
+      fail-fast: false
+      matrix:
+        astrbot_ref:
+          - v4.27.4
+          - v4.28.0-beta.1
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - run: git clone --depth 1 --branch '${{ matrix.astrbot_ref }}' https://github.com/AstrBotDevs/AstrBot.git AstrBot
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
+        with:
+          enable-cache: false
+      - run: uv sync --directory AstrBot
+      - name: Run Relay tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}/..
+        run: uv run --directory AstrBot python -m pytest "$GITHUB_WORKSPACE/tests" -q
