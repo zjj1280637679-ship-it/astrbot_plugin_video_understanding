@@ -46,6 +46,10 @@ class VideoSemanticSearchPlugin(Star):
                 or ""
             ).strip(),
         }
+        # Backward-compatible public handles from the original video-only plugin.
+        self.provider_id = self.provider_ids["video"]
+        self.query_video_tool: QueryVideoTool | None = None
+
         self.bootstrap_prompts = {
             "image": str(self.config.get("image_bootstrap_prompt") or "").strip(),
             "audio": str(self.config.get("audio_bootstrap_prompt") or "").strip(),
@@ -60,6 +64,7 @@ class VideoSemanticSearchPlugin(Star):
 
         if self.enable_query_tools:
             self._register_query_tools()
+        self.query_video_tool = self.query_tools.get("video")
 
         logger.info(
             "[modality-relay] loaded version=%s mode=%s query_tools=%s "
@@ -149,6 +154,19 @@ class VideoSemanticSearchPlugin(Star):
                 continue
             if not bindings.get(modality):
                 req.func_tool.remove_tool(tool.name)
+
+    async def scope_query_video(
+        self, event: AstrMessageEvent, req: ProviderRequest
+    ) -> None:
+        """Compatibility shim for v0.1 tests and integrations.
+
+        This keeps the old public request-scoping handle without registering a
+        second AstrBot hook or running the v0.2 passive relay twice.
+        """
+        self._scope_query_tools(
+            req,
+            {"image": [], "audio": [], "video": bind_videos_from_event(event)},
+        )
 
     def _read_host_config(self, event: AstrMessageEvent) -> dict:
         getter = getattr(self.context, "get_config", None)
